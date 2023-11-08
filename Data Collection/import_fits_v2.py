@@ -1,13 +1,5 @@
-import os
-from datetime import datetime
-from astroquery.cadc import Cadc
-from astropy import units as u
-from astropy.coordinates import SkyCoord
-from astropy.io import fits
-import numpy as np
-from google.colab import drive
-import requests
-
+#   -- NOTES --
+#
 #   meant to run on google colab, the script filters the fits images then downloads them
 #   to google drive folder called "/content/drive/MyDrive/NEOSsat Images" and places them into 
 #   folders, either "object name" or "dark" => so that we can then feed it to jason's cleaning
@@ -18,6 +10,25 @@ import requests
 #   - not sure if it's filtering the date properly, check that
 #   - lots of duplicate images aren't getting downloaded, check if 'observationID' is what we should be 
 #   labeling the fits files
+#
+#   how to run...
+#
+#   1. new cell for downloads, run cell
+#
+#   !pip install astroquery
+#   !pip install astropy
+#
+#   2. new cell with code bellow, run cell (will ask you to connect drive to colab, accept)
+
+import os
+from datetime import datetime
+from astroquery.cadc import Cadc
+from astropy import units as u
+from astropy.coordinates import SkyCoord
+from astropy.io import fits
+import numpy as np
+from google.colab import drive
+import requests
 
 drive.mount('/content/drive')
 
