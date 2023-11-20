@@ -91,6 +91,14 @@ if (__name__ == "__main__"):
         if not os.path.exists(DATA_PATH + "image/fits_processor"):
             libExists = False
             makedirs(DATA_PATH + "image/fits_processor")
+            if not os.path.exists(DATA_PATH + "image/fits_processor/incoming"):
+                makedirs(DATA_PATH + "image/fits_processor/incoming")
+            if not os.path.exists(DATA_PATH + "image/fits_processor/outgoing"):
+                makedirs(DATA_PATH + "image/fits_processor/outgoing")
+                makedirs(DATA_PATH + "image/fits_processor/outgoing/ASTRO")
+            if not os.path.exists(DATA_PATH + "image/fits_processor/log"):
+                makedirs(DATA_PATH + "image/fits_processor/log")
+                
         if not os.path.exists(logdir):
             makedirs(logdir)
 
