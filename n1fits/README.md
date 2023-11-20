@@ -61,6 +61,11 @@ $ cd ~/n1fits/bin/
 First, we must create the library paths:
 ```
 $ python3 launch_fits.py
+$ cd ..
+$ mkdir mission/image/fits_processor/log
+$ mkdir mission/image/fits_processor/incoming
+$ mkdir mission/image/fits_processor/outgoing
+$ mkdir mission/image/fits_processor/outgoing/ASTRO
 ```
 \
 Working image directory is **../mission/image/fitsprocessor/outgoing/ASTRO/**
