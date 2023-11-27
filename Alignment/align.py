@@ -1,16 +1,10 @@
-from astropy.convolution import interpolate_replace_nans
 import os
 from astropy.io import fits
-from astropy.utils.data import get_pkg_data_filename
-from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
 import numpy as np
 import matplotlib.pyplot as plt
 from photutils.detection import DAOStarFinder
 from astropy.stats import sigma_clipped_stats
-from scipy.spatial import distance
 from scipy.ndimage import shift
-from skimage.transform import AffineTransform, warp
-import itertools
 
 
 INPUT_PATH = 'mission_images/'
