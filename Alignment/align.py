@@ -9,45 +9,39 @@ from photutils.detection import DAOStarFinder
 from astropy.stats import sigma_clipped_stats
 from scipy.spatial import distance
 from scipy.ndimage import shift
+from skimage.transform import AffineTransform, warp
+import itertools
 
 
 INPUT_PATH = 'mission_images/'
-# Just working with one image for now
 OUTPUT_PATH = 'outgoing/'
 
 
-def align(base_source, source2, filename):
+def align(sources_image1, sources_image2, image2_filename):
 
-    matched_indices = []
-    tolerance = 1.0  # Tolerance for matching detected objects
+    # Choose a star present in both images for alignment - assume brightest star is present in both
+    reference_star_index = np.argmax(sources_image1['flux']) 
 
-    for i, star1 in enumerate(base_source):
-        min_dist = np.inf
-        min_idx = None
-        for j, star2 in enumerate(source2):
-            dist = distance.euclidean((star1['xcentroid'], star1['ycentroid']), (star2['xcentroid'], star2['ycentroid']))
-            if dist < min_dist and j not in matched_indices:
-                min_dist = dist
-                min_idx = j
-        if min_dist < tolerance and min_idx is not None:
-            matched_indices.append(min_idx)
+    # Get the coordinates of the selected star in both images
+    ref_star_coords_image1 = (sources_image1['xcentroid'][reference_star_index], sources_image1['ycentroid'][reference_star_index])
+    ref_star_coords_image2 = (sources_image2['xcentroid'][reference_star_index], sources_image2['ycentroid'][reference_star_index])
 
-    # Get coordinates of matched stars in both images
-    matched_stars_img1 = base_source
-    matched_stars_img2 = [source2[i] for i in matched_indices]
+    # Calculate the shift needed to align the images
+    shift_x = ref_star_coords_image1[0] - ref_star_coords_image2[0]
+    shift_y = ref_star_coords_image1[1] - ref_star_coords_image2[1]
 
-    # Calculate the translation needed to align the stars in both images
-    x_shift = np.mean([star2['xcentroid'] - star1['xcentroid'] for star1, star2 in zip(matched_stars_img1, matched_stars_img2)])
-    y_shift = np.mean([star2['ycentroid'] - star1['ycentroid'] for star1, star2 in zip(matched_stars_img1, matched_stars_img2)])
+    # Shift one image relative to the other using interpolation
+    with fits.open(INPUT_PATH + image2_filename, mode='update') as hdul:
+        shifted_data = shift(hdul[0].data, (shift_y, shift_x), mode='nearest')
+        hdul[0].data = shifted_data
+        
+        hdu = fits.PrimaryHDU(shifted_data, header=hdul[0].header)
+        hdul_out = fits.HDUList([hdu])
+        hdul_out.writeto(OUTPUT_PATH + 'aligned_' + filename, overwrite=True)
 
-    with fits.open(INPUT_PATH + filename) as hdul:
-        img2 = hdul[0].data
+    print(f"Aligning images with a shift of ({shift_x}, {shift_y}) pixels.")
 
-    # Apply the calculated shift to align the second image with the first
-    aligned_img2 = shift(img2, (y_shift, x_shift))
-    fits.writeto(OUTPUT_PATH + 'shifted_' + filename, aligned_img2, overwrite=True)
-    
-    return True
+    # Update header information ?
 
 
 def detect_objects(filename):
@@ -63,35 +57,6 @@ def detect_objects(filename):
     sources = daofind(data - median)
 
     return sources
-
-if __name__ == "__main__":
-    if not os.path.exists(OUTPUT_PATH):
-        os.makedirs(OUTPUT_PATH)
-
-    base_file = None
-    input_files = []
-
-    # Collect all FITS files in the INPUT_PATH directory
-    for filename in os.listdir(INPUT_PATH):
-        # Check if the filename ends with '.fits' (case insensitive)
-        if filename.lower().endswith('.fits'):
-            if base_file is None:
-                base_file = filename
-            else:
-                input_files.append(filename)
-
-    if base_file is not None:
-        base_source = detect_objects(os.path.join(INPUT_PATH, base_file))
-
-        for filename in input_files:
-            source2 = detect_objects(os.path.join(INPUT_PATH, filename))
-            align(base_source, source2, filename)
-        if len(input_files) == 0:
-             print("Only one FITS file found; not enough to find anomalies.")
-            
-    else:
-        print("No FITS files found in the specified directory.")
-
 
 
 ## Call this to see a plot of the detected objects
@@ -143,3 +108,107 @@ def detect_objects_with_visualizer(filename):
 
     cid = fig.canvas.mpl_connect('button_press_event', onclick)
     plt.show()
+
+
+
+if __name__ == "__main__":
+    if not os.path.exists(OUTPUT_PATH):
+        os.makedirs(OUTPUT_PATH)
+
+    base_source = None
+    for filename in os.listdir(INPUT_PATH):
+        # Check if the filename ends with '.fits' (case insensitive)
+        if filename.lower().endswith('.fits'):
+            if base_source is None:
+                base_source = detect_objects(filename)
+            else:
+                align(base_source, detect_objects(filename), filename)
+
+    if base_source is None:
+        print("No FITS files found in the specified directory.")
+        exit()
+
+
+## Rectification with triangle alignment
+## Probably unnecessary for our purposes
+def get_triangle(objects):
+    """
+    Inefficient way of obtaining the lengths of each triangle's side.
+    Normalized so that the minimum length is 1.
+    """
+
+    # 'stars' should be a list of detected stars' coordinates
+    # For example, stars = [(x1, y1), (x2, y2), (x3, y3), ...]
+
+    # Find all possible combinations of three stars
+    possible_triangles = list(itertools.combinations(range(len(objects)), 3))
+
+    for triangle in possible_triangles:
+        # Extract coordinates of three points for each triangle combination
+        p1, p2, p3 = objects[triangle[0]], objects[triangle[1]], objects[triangle[2]]
+
+        # Calculate distances between points (you can use different criteria here)
+        dist1 = ((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)**0.5
+        dist2 = ((p3[0] - p2[0])**2 + (p3[1] - p2[1])**2)**0.5
+        dist3 = ((p1[0] - p3[0])**2 + (p1[1] - p3[1])**2)**0.5
+
+        # You can set conditions here to determine a valid triangle
+        # For example, you might check for specific angle conditions or ratios between distances
+        # If the conditions are met, return the indices of the points forming the triangle
+        # Here's a placeholder condition for demonstration purposes
+        if dist1 < dist2 + dist3 and dist2 < dist1 + dist3 and dist3 < dist1 + dist2:
+            return triangle  # Return indices of points forming a valid triangle
+
+    # Return None if no valid triangle is found
+    return None
+
+
+def main_for_rectification():
+# if __name__ == "__main__":
+    if not os.path.exists(OUTPUT_PATH):
+        os.makedirs(OUTPUT_PATH)
+
+    # detect_objects_with_visualizer('NEOS_SCI_2023138092727.fits')
+
+    file_sources = {}  # Dictionary to store detected objects for each file
+    base_source = None  # The file with the most detected objects will be used as the base for optimal alignment
+    max_stars = -1
+
+    # Collect all FITS files in the INPUT_PATH directory and detect objects
+    for filename in os.listdir(INPUT_PATH):
+        # Check if the filename ends with '.fits' (case insensitive)
+        if filename.lower().endswith('.fits'):
+            file_sources[filename] = detect_objects(filename)
+            num_stars = len(file_sources[filename])
+
+            if num_stars > max_stars:
+                max_stars = num_stars
+                base_source = file_sources[filename] 
+
+    if base_source is None:
+        print("No FITS files found in the specified directory.")
+        exit()
+    
+    base_triangle = get_triangle(base_source)
+    if base_triangle is None:
+        print("No image with enough stars detected to serve as a base for triangle rectification.")
+        ### WRITE code for simpler alignment ###
+        exit()
+
+    for filename, sources in file_sources.items():
+        if sources is base_source:
+            continue
+
+        if len(sources) < 3:
+            print("Not enough stars found in " + filename + " to align with triangle rectification.")
+            ### Write code for simpler alignment ###
+            continue
+
+        triangle = get_triangle(sources)
+        if triangle is None:
+            align(base_source, sources, filename)
+
+    if max_stars == -1:
+        print("No FITS files found in the specified directory.")
+    elif max_stars < 3:
+        print("No image with enough stars detected to serve as a base for triangle rectification.")
