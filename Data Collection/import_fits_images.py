@@ -11,8 +11,12 @@ from astropy.io import fits
 import numpy as np
 import requests
 
-def fetch_images(RA=240, DEC=0, radius=None):
-    print("Fetching images at ", RA, " ", DEC)
+def fetch_images(RA, DEC, radius=None):
+    if not RA:
+        RA = 120
+    if not DEC:
+        DEC = 0
+    print("Fetching images at", RA, DEC)
      
     # Initialize the CADC client
     cadc = Cadc()
@@ -22,13 +26,14 @@ def fetch_images(RA=240, DEC=0, radius=None):
     if not radius:
         radius = 2 * u.deg
     else:
-        radius = radius * u.deg
+        radius = float(radius) * u.deg
 
     # Get today's date in the required format
     today_date = datetime.now().strftime('%Y-%m-%d')
 
     # Query CADC for data within the specified region, collection, and date
-    results = cadc.query_region(coords, radius, collection='NEOSSAT')
+    results = cadc.query_region(coordinates=coords, radius=radius, collection='NEOSSAT')
+    print("Found", len(results), "results")
 
     # Filter results based on 'time_exposure' and 'instrument_keywords'
     accepted_modes = ['16-FINE_POINT', '14-FINE_SLEW']
@@ -41,9 +46,14 @@ def fetch_images(RA=240, DEC=0, radius=None):
 
     # Apply both masks to filter the results
     filtered_results = results[mask_modes & mask_exposure]
+    print("Filtered to", len(filtered_results), "images")
+    
+    if len(filtered_results) == 0:
+        print("No images found")
+        return
 
     # Get a list of image URLs based on the filtered results
-    image_list = cadc.get_image_list(filtered_results, coords, radius)
+    image_list = cadc.get_image_list(query_result=filtered_results, coordinates=coords, radius=radius)
 
     # Download directory
     download_directory = './FITSImages_' + str(RA) + "_" + str(DEC)
@@ -89,7 +99,7 @@ def fetch_images(RA=240, DEC=0, radius=None):
             print("File already exists: " + filename)
 
 if __name__ == "__main__":
-    RA = input("Enter the right ascension (defaults to 240): ")
+    RA = input("Enter the right ascension (defaults to 120): ")
     DEC = input("Enter the declination (defaults to 0): ")
     radius = input("Enter the radius range (defaults to 2 degrees): ")
     
