@@ -6,10 +6,6 @@ from photutils.detection import DAOStarFinder
 from astropy.stats import sigma_clipped_stats
 import numpy as np
 import cv2
-from scipy.ndimage import shift, median_filter
-from scipy.ndimage import gaussian_filter
-from photutils.utils import make_random_cmap
-from photutils import detect_threshold, detect_sources
 from skimage.transform import resize
 import random
 
