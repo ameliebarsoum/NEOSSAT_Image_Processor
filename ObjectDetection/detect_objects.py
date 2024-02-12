@@ -6,6 +6,7 @@ from photutils.detection import DAOStarFinder
 from astropy.stats import sigma_clipped_stats
 import numpy as np
 import cv2
+from scipy.ndimage import shift
 from skimage.transform import resize
 import random
 
@@ -44,7 +45,7 @@ def align(sources_image1, sources_image2, image2_filename):
         hdu = fits.PrimaryHDU(shifted_data, header=hdul[0].header)
         hdul_out = fits.HDUList([hdu])
         hdul_out.writeto(ALIGNED_PATH + image2_filename, overwrite=True)
-    #print(f"Aligning images with a shift of ({shift_x}, {shift_y}) pixels as {ALIGNED_PATH + image2_filename}.")
+    print(f"Aligning images with a shift of ({shift_x}, {shift_y}) pixels as {ALIGNED_PATH + image2_filename}.")
 
 
 def detect_objects(filepath):
@@ -96,6 +97,7 @@ def subtract_background(filename, sources):
         hdu = fits.PrimaryHDU(final_image, header=hdul[0].header)
         hdul_out = fits.HDUList([hdu])
         hdul_out.writeto(output_filename, overwrite=True)
+        print(f"Subtracted background and darkened image as {output_filename}.")
 
 """
 Perform pixel differencing on two FITS files
@@ -121,7 +123,7 @@ def pixel_difference(image1_filename, image2_filename, idx):
             diff_data = np.abs(data1_resized - data2_resized)  # Calculate absolute difference
 
             # Save the difference image to a new FITS file
-            output_filename = DIFFERENCED_PATH + idx + image2_filename
+            output_filename = DIFFERENCED_PATH + str(idx) + image2_filename
             hdu = fits.PrimaryHDU(diff_data, header=hdul1[0].header)
             hdul_out = fits.HDUList([hdu])
             hdul_out.writeto(output_filename, overwrite=True)
