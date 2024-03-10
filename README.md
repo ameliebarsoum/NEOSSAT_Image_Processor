@@ -3,7 +3,7 @@
 
 _Step 0:_ When running the code for the first time, make sure you have astroquery installed. You can do this by running `pip install astroquery` on your terminal
 
-_Step 1:_ navigate to DataCollection and run import_fits_images.py. When prompted, you can enter any coordinates. (14, -13) works. It will generate a folder and put the images there.
+_Step 1:_ navigate to DataCollection and run import_fits_images.py. When prompted, you can enter any coordinates. (RA: 14, Dec: -13, radius: 1) works. It will generate a folder and put the images there.
 
 _Step 2:_ Follow the README in the cleaner if you want to run the cleaner. Not necessary if you are just testing on the output of object detection. 
 
