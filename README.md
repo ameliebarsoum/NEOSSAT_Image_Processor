@@ -7,10 +7,7 @@ _Step 1:_ navigate to DataCollection and run import_fits_images.py. When prompte
 
 _Step 2:_ Follow the README in the cleaner if you want to run the cleaner. Not necessary if you are just testing on the output of object detection. 
 
-_Step 3:_ 
-
-Run
-
+_Step 3:_ Run
 ```
 $ cd ../../../../../
 $ cd ObjectDetection
