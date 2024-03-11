@@ -1,7 +1,6 @@
 ## 
 ## Credit to https://github.com/asc-csa/NEOSSAT_Tutorial/blob/main/Code/Notebook%201_%20Extracting%20Data%20and%20Visualization.ipynb
 ##
-
 import os
 from datetime import datetime
 from astroquery.cadc import Cadc
@@ -10,13 +9,19 @@ from astropy.coordinates import SkyCoord
 from astropy.io import fits
 import numpy as np
 import requests
+import sys
 
-def fetch_images(RA, DEC, radius=None):
-    if not RA:
-        RA = 120
-    if not DEC:
-        DEC = 0
-    print("Fetching images at", RA, DEC)
+def main(args):
+
+    if len(args) < 3 or len(args) > 4: 
+        print(usage())
+        sys.exit(1) 
+
+    RA = args[1]
+    DEC = args[2] if len(args) > 2 else None
+    radius = args[3] if len(args) > 3 else None
+
+    print("Fetching images at", RA, DEC, "along a radius of", radius)
      
     # Initialize the CADC client
     cadc = Cadc()
@@ -55,8 +60,8 @@ def fetch_images(RA, DEC, radius=None):
     # Get a list of image URLs based on the filtered results
     image_list = cadc.get_image_list(query_result=filtered_results, coordinates=coords, radius=radius)
 
-    # Download directory
-    download_directory = './FITSImages_' + str(RA) + "_" + str(DEC)
+    # Download directory - assuming that this is being executed from the root directory (i.e., by run_all.sh)
+    download_directory = 'DataCollection/FITSImages_' + str(RA) + "_" + str(DEC)
     if not os.path.exists(download_directory):
         os.makedirs(download_directory)
 
@@ -98,9 +103,13 @@ def fetch_images(RA, DEC, radius=None):
         else:
             print("File already exists: " + filename)
 
+def usage():
+    return """
+Usage: ./import_fits_images.py <right ascension> <declination> <radius>
+Description: This script that will fetch images from the CADC to perform object detection on.
+            Right ascension and declination are celestial coordinates, like longitude and latitude. Both are expressed in degrees.
+            Radius represents the range of RA/DEC that is being considered. It is also expresssed in degrees. A float between 0.2 and 1 is recommended.
+"""
+
 if __name__ == "__main__":
-    RA = input("Enter the right ascension (defaults to 120): ")
-    DEC = input("Enter the declination (defaults to 0): ")
-    radius = input("Enter the radius range (defaults to 1 degree): ")
-    
-    fetch_images(RA, DEC, radius)
+    main(sys.argv)
