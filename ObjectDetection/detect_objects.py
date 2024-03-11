@@ -249,6 +249,18 @@ if __name__ == "__main__":
             sources = detect_objects(DIFFERENCED_PATH + filename)
             # Move files with stars detected into flagged folder
             if sources is None or len(sources) != 0:
+                with fits.open(DIFFERENCED_PATH + filename, mode='update') as hdul:
+                    header = hdul[0].header
+                
+                    # Add detected source information to the header for each source
+                    for i, source in enumerate(sources):
+                        header[f'XCENTER_{i}'] = (source['xcentroid'], f'X centroid of detected source {i}')
+                        header[f'YCENTER_{i}'] = (source['ycentroid'], f'Y centroid of detected source {i}')
+                
+                    # Save changes to header
+                    hdul.flush()  # Writes the updated header to the file
+            
+                # Now move the updated file to the flagged folder
                 os.rename(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename)
                 print(f"Flagged {filename} for classification.")
 
