@@ -9,45 +9,23 @@ import cv2
 from scipy.ndimage import shift
 from skimage.transform import resize
 import random
+from astropy.nddata import CCDData
+from astropy.stats import mad_std
+from ccdproc import CCDData, trim_image, combine
+import warnings 
+warnings.filterwarnings("ignore")
 
-"""
-Pre-processing algorithm that applies peak finding, background subtraction
-with a masked gaussian blur filter + darkening, and alignment based on peaks.
-Preparation for pixel differencing.
-Takes in images from the same section of the sky that have gone through 
-photometry cleaning algorithm.
-"""
-
-INPUT_PATH = 'mission_images/'
+INPUT_PATH = '../n1fits/mission/image/outgoing/ASTRO/'
 ALIGNED_PATH = 'aligned/'
 GAUSSIANBLUR_PATH = 'gaussian_blur/'
 DIFFERENCED_PATH = 'differenced/'
 FLAGGED_PATH = 'flagged/'
+STACKED_PATH = 'stacked/stacked_img.fits'
 
-def align(sources_image1, sources_image2, image2_filename):
-
-    # Choose a star present in both images for alignment - assume brightest star is present in both
-    reference_star_index = np.argmax(sources_image1['flux']) 
-
-    # Get the coordinates of the selected star in both images
-    ref_star_coords_image1 = (sources_image1['xcentroid'][reference_star_index], sources_image1['ycentroid'][reference_star_index])
-    ref_star_coords_image2 = (sources_image2['xcentroid'][reference_star_index], sources_image2['ycentroid'][reference_star_index])
-
-    # Calculate the shift needed to align the images
-    shift_x = ref_star_coords_image1[0] - ref_star_coords_image2[0]
-    shift_y = ref_star_coords_image1[1] - ref_star_coords_image2[1]
-
-    # Shift one image relative to the other using interpolation
-    with fits.open(GAUSSIANBLUR_PATH + image2_filename, mode='update') as hdul:
-        shifted_data = shift(hdul[0].data, (shift_y, shift_x), mode='nearest')
-        hdul[0].data = shifted_data
-        
-        hdu = fits.PrimaryHDU(shifted_data, header=hdul[0].header)
-        hdul_out = fits.HDUList([hdu])
-        hdul_out.writeto(ALIGNED_PATH + image2_filename, overwrite=True)
-    print(f"Aligning images with a shift of ({shift_x}, {shift_y}) pixels as {ALIGNED_PATH + image2_filename}.")
-
-
+"""
+Input: Path to fits file
+Description: Detects objects in the image using the DAOStarFinder algorithm
+"""
 def detect_objects(filepath):
     # Open the FITS file
     with fits.open(filepath) as hdul:
@@ -62,11 +40,66 @@ def detect_objects(filepath):
 
     return sources
 
+
 """
-Subtract backgrounds of image located at @filename
-based on peaks given by @sources
+@base_sources: sources from an image with which the other image will be aligned to
+@img_sources: sources from the image to be aligned
+@img_filename: filename of the image to be aligned
+description: Aligns one image to another based on the brightest star, such that their stars overlap.
 """
-def subtract_background(filename, sources):
+def align(base_sources, img_sources, img_filename):
+    # Choose a star present in both images for alignment - assume brightest star is present in both
+    reference_star_index = np.argmax(base_sources['flux']) 
+
+    # Get the coordinates of the selected star in both images
+    ref_star_coords_image1 = (base_sources['xcentroid'][reference_star_index], base_sources['ycentroid'][reference_star_index])
+    ref_star_coords_image2 = (img_sources['xcentroid'][reference_star_index], img_sources['ycentroid'][reference_star_index])
+
+    # Calculate the shift needed to align the images
+    shift_x = ref_star_coords_image1[0] - ref_star_coords_image2[0]
+    shift_y = ref_star_coords_image1[1] - ref_star_coords_image2[1]
+
+    # Shift one image relative to the other using interpolation
+    with fits.open(GAUSSIANBLUR_PATH + img_filename, mode='update') as hdul:
+        shifted_data = shift(hdul[0].data, (shift_y, shift_x), mode='nearest')
+        hdul[0].data = shifted_data
+        
+        hdu = fits.PrimaryHDU(shifted_data, header=hdul[0].header)
+        hdul_out = fits.HDUList([hdu])
+        hdul_out.writeto(ALIGNED_PATH + img_filename, overwrite=True)
+
+    print(f"Aligning images with a shift of ({shift_x}, {shift_y}) pixels as {ALIGNED_PATH + img_filename}.")
+    
+
+"""
+Crops all images in the directory to the minimum sized image of the set
+"""
+def crop_all(ALIGNED_PATH):
+    # Get all the images in the directory and load them as CCDData objects
+    ccds = [CCDData.read(ALIGNED_PATH + filename, unit='adu') for filename in os.listdir(ALIGNED_PATH) if filename.lower().endswith('.fits')]
+    
+    # Identify the smallest image size within the specified range
+    sizes = [ccd.shape for ccd in ccds]
+    
+    # Find minimum width, height for cropping
+    min_size = (min(sizes, key=lambda x: x[0])[0], min(sizes, key=lambda x: x[1])[1])
+    print(f"Cropping images to the minimum size of the set: {min_size}")
+    
+    # Replace original images with new cropped images
+    for filename in os.listdir(ALIGNED_PATH):
+        if filename.lower().endswith('.fits'):
+            # Open as CCDData to maintain metadata
+            ccd = CCDData.read(ALIGNED_PATH + filename, unit='adu')
+            trimmed_ccd = trim_image(ccd, fits_section=f'[1:{min_size[1]}, 1:{min_size[0]}]')
+            
+            # Write the trimmed image back to disk
+            trimmed_ccd.write(ALIGNED_PATH + filename, overwrite=True)
+    print(f"Cropped files to the minimum size of the set: {trimmed_ccd.shape}")
+
+"""
+Applies Gaussian blur to the background (non-sources) of image located at @filename based on peaks given by @sources
+"""
+def blur_background(filename, sources):
     # Open the FITS file
     with fits.open(INPUT_PATH + filename) as hdul:
         image = hdul[0].data  # Accessing the data from the primary HDU
@@ -97,7 +130,26 @@ def subtract_background(filename, sources):
         hdu = fits.PrimaryHDU(final_image, header=hdul[0].header)
         hdul_out = fits.HDUList([hdu])
         hdul_out.writeto(output_filename, overwrite=True)
-        print(f"Subtracted background and darkened image as {output_filename}.")
+
+"""
+Perform image stacking on a set of FITS files to reduce noise for pixel differencing
+"""
+def image_stacker(ALIGNED_PATH):
+    paths = [ALIGNED_PATH + filename for filename in os.listdir(ALIGNED_PATH) if filename.lower().endswith('.fits')]
+    ccds = [CCDData.read(path, unit="adu") for path in paths]
+    
+    combined_image = combine(ccds,
+                             output_file=STACKED_PATH,
+                             method='average',
+                             sigma_clip=True,
+                             sigma_clip_low_thresh=3,
+                             sigma_clip_high_thresh=3,
+                             sigma_clip_func=np.median,
+                             sigma_clip_dev_func=mad_std,
+                             mem_limit=350e6,
+                             overwrite_output=True)
+
+    return combined_image
 
 """
 Perform pixel differencing on two FITS files
@@ -129,6 +181,35 @@ def pixel_difference(image1_filename, image2_filename, idx):
             hdul_out.writeto(output_filename, overwrite=True)
     except FileNotFoundError:
         print(f"Could not find {image1_file} or {image2_file}. Previous steps may not have been completed.")
+        return
+    
+"""
+Performs pixel differencing with the stacked image found at STACKED_PATH
+"""
+def pixel_difference_with_stack(image1_filename):
+    image1_file = os.path.join(ALIGNED_PATH, image1_filename)
+    try:
+        with fits.open(image1_file) as hdul1, fits.open(STACKED_PATH) as hdul2:
+            data1 = hdul1[0].data
+            data2 = hdul2[0].data
+
+            # Images are not always the same size. Not sure if this is a result of the cleaning algorithm or not.
+            if (data1.shape[0] != data2.shape[0] or data1.shape[1] != data2.shape[1]):
+                print("Adjusting size for pixel differencing")
+                min_shape = (min(data1.shape[0], data2.shape[0]), min(data1.shape[1], data2.shape[1]))
+                data1 = resize(data1, min_shape, mode='edge') 
+                data2 = resize(data2, min_shape, mode='edge')
+
+            # Perform pixel-wise difference
+            diff_data = np.abs(data1 - data2)  # Calculate absolute difference
+
+            # Save the difference image to a new FITS file
+            output_filename = DIFFERENCED_PATH + image1_filename
+            hdu = fits.PrimaryHDU(diff_data, header=hdul1[0].header)
+            hdul_out = fits.HDUList([hdu])
+            hdul_out.writeto(output_filename, overwrite=True)
+    except FileNotFoundError:
+        print(f"Could not find {image1_file} or stacked image. Previous steps may not have been completed.")
         return
 
 """
@@ -185,7 +266,7 @@ def detect_objects_with_visualizer(filename):
 
 
 """
-helper for main 
+Helper for choosing random base image for pixel diffencing 
 """
 def get_random_files(directory, num_files):
     files = [filename for filename in os.listdir(directory) if filename.lower().endswith('.fits')]
@@ -208,22 +289,26 @@ if __name__ == "__main__":
         os.makedirs(DIFFERENCED_PATH) 
     if not os.path.exists(FLAGGED_PATH):
         os.makedirs(FLAGGED_PATH) 
+    if not os.path.exists("stacked"):
+        os.makedirs("stacked")
 
     # Alignment
     base_source = None
     for filename in fits_files:
         if base_source is None:
             base_source = detect_objects(INPUT_PATH + filename)
-            subtract_background(filename, base_source)
+            blur_background(filename, base_source)
         else:
             cur_source = detect_objects(INPUT_PATH + filename)
-            subtract_background(filename, cur_source)
+            blur_background(filename, cur_source)
             align(base_source, cur_source, filename)
 
     if base_source is None:
         print("No FITS files found in the specified directory.")
         exit()
 
+    crop_all(ALIGNED_PATH)
+    
     # Pixel Differencing
     if len(fits_files) < 4:
         fits_files = [filename for filename in os.listdir(INPUT_PATH) if filename.lower().endswith('.fits')]
@@ -234,14 +319,14 @@ if __name__ == "__main__":
                     base_path = os.path.join(INPUT_PATH, base_filename)
                     comparison_path = os.path.join(INPUT_PATH, comparison_filename)
                     pixel_difference(base_path, comparison_path, j)
-    else:            
-        for filename in os.listdir(INPUT_PATH):
-            if filename.lower().endswith('.fits'):                
-                # Get 3 random files for comparison
-                random_files = get_random_files(INPUT_PATH, 3)
-                
-                for i, random_filename in enumerate(random_files):
-                    pixel_difference(filename, random_filename, i)
+    else: 
+        stacked_image = image_stacker(ALIGNED_PATH=ALIGNED_PATH)
+
+        # Perform pixel differencing with all aligned images
+        for filename in os.listdir(ALIGNED_PATH):
+            if filename.lower().endswith('.fits'):
+                pixel_difference_with_stack(filename)
+
 
     # Object detection on difference images
     for filename in os.listdir(DIFFERENCED_PATH):
