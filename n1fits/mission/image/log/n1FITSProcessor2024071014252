@@ -1,0 +1,79 @@
+
+************************************************************************
+************************************************************************
+2024-03-10 21:42:52,639 - n1 Image Processor - INFO - (1) Java FITS processor start...
+2024-03-10 21:42:52,675 - n1 Image Processor - INFO - 
+-----------------------------
+Java FITS STDOUT...
+
+2024-03-10 21:42:52,675 - n1 Image Processor - INFO - Error: Invalid or corrupt jarfile /Users/ameliebarsoum/Desktop/ECSE_458/NEOSSAT_Image_Processor/n1fits/bin/fits_processor/JneossatTLM.jar
+
+2024-03-10 21:42:52,675 - n1 Image Processor - INFO - 
+-----------------------------
+
+2024-03-10 21:42:52,675 - n1 Image Processor - INFO - (2) FITS Sorter start...
+
+========================================
+image dir is /Users/ameliebarsoum/Desktop/ECSE_458/NEOSSAT_Image_Processor/n1fits/mission/image/fits_processor/outgoing/
+save dir is /Users/ameliebarsoum/Desktop/ECSE_458/NEOSSAT_Image_Processor/n1fits/mission/image/fits_cleaner/data/images/
+dealing with: 
+.DS_Store
+ASTRO
+
+========================================
+image dir is /Users/ameliebarsoum/Desktop/ECSE_458/NEOSSAT_Image_Processor/n1fits/mission/image/fits_processor/outgoing/ASTRO/
+save dir is /Users/ameliebarsoum/Desktop/ECSE_458/NEOSSAT_Image_Processor/n1fits/mission/image/fits_cleaner/data/images/ASTRO/
+dealing with: 
+NEOS_SCI_2023311012242.fits
+NEOS_SCI_2021050072638.fits
+NEOS_SCI_2020344121529.fits
+NEOS_SCI_2021050073049.fits
+NEOS_SCI_2020344053345.fits
+NEOS_SCI_2021050141237.fits
+NEOS_SCI_2021050140826.fits
+NEOS_SCI_2023311011814.fits
+NEOS_SCI_2021048083009.fits
+NEOS_SCI_2023311012028.fits
+NEOS_SCI_2023311011346.fits
+NEOS_SCI_2021050104732.fits
+NEOS_SCI_2021050090705.fits
+NEOS_SCI_2021048101036.fits
+NEOS_SCI_2021050105143.fits
+NEOS_SCI_2023311010022.fits
+NEOS_SCI_2021048133130.fits
+NEOS_SCI_2023311011132.fits
+NEOS_SCI_2023311010236.fits
+NEOS_SCI_2023311010918.fits
+NEOS_SCI_2021050140415.fits
+NEOS_SCI_2023311012456.fits
+NEOS_SCI_2021050091116.fits
+NEOS_SCI_2021050104321.fits
+NEOS_SCI_2020344085441.fits
+NEOS_SCI_2021048100625.fits
+NEOS_SCI_2023311010450.fits
+NEOS_SCI_2021048132719.fits
+NEOS_SCI_2021059023533.fits
+NEOS_SCI_2021048132308.fits
+NEOS_SCI_2021059023122.fits
+NEOS_SCI_2023311005808.fits
+NEOS_SCI_2021048100214.fits
+NEOS_SCI_2020344071411.fits
+NEOS_SCI_2023311011600.fits
+NEOS_SCI_2021048082558.fits
+NEOS_SCI_2021050072227.fits
+NEOS_SCI_2023311010704.fits
+NEOS_SCI_2021050090254.fits
+NEOS_SCI_2020344135601.fits
+HEOSS
+
+========================================
+image dir is /Users/ameliebarsoum/Desktop/ECSE_458/NEOSSAT_Image_Processor/n1fits/mission/image/fits_processor/outgoing/HEOSS/
+save dir is /Users/ameliebarsoum/Desktop/ECSE_458/NEOSSAT_Image_Processor/n1fits/mission/image/fits_cleaner/data/images/HEOSS/
+dealing with: 
+
+
+2024-03-10 21:42:57,467 - Finished. 40 files sorted. 0 dark(s) added.
+
+2024-03-10 21:42:57,486 - n1 Image Processor - INFO - (3) FITS Cleaner start...
+2024-03-10 21:42:58,289 - n1 Image Processor - INFO - (4) FITS Publisher start...
+2024-03-10 21:42:58,379 - n1 Image Processor - INFO - (5) FITS Stats start...
