@@ -40,6 +40,23 @@ def detect_objects(filepath):
 
     return sources
 
+"""
+Helper function that finds the indices of the closest stars in the two images
+"""
+def find_closest_stars(star_coordinates_base, star_coordinates_img):
+    closest_idx_base = -1
+    closest_idx_img = -1
+    min_distance = 1000
+    for i, star_base in enumerate(star_coordinates_base):
+        for j, star_img in enumerate(star_coordinates_img):
+            distance = np.sqrt((star_base[0] - star_img[0]) ** 2 + (star_base[1] - star_img[1]) ** 2)
+            if distance < min_distance:
+                min_distance = distance
+                closest_idx_base = i
+                closest_idx_img = j
+    if min_distance > 20:
+        print("No matching stars found for alignment. Returning closest stars.")
+    return closest_idx_base, closest_idx_img
 
 """
 @base_sources: sources from an image with which the other image will be aligned to
@@ -48,12 +65,18 @@ def detect_objects(filepath):
 description: Aligns one image to another based on the brightest star, such that their stars overlap.
 """
 def align(base_sources, img_sources, img_filename):
-    # Choose a star present in both images for alignment - assume brightest star is present in both
-    reference_star_index = np.argmax(base_sources['flux']) 
+    
+    star_coordinates_base = np.array([base_sources['xcentroid'], base_sources['ycentroid']]).T
+    star_coordinates_img = np.array([img_sources['xcentroid'], img_sources['ycentroid']]).T
+    base_star_idx, img_star_idx = find_closest_stars(star_coordinates_base, star_coordinates_img)
+
+    if base_star_idx == -1 or img_star_idx == -1:
+        print("No matching stars found for alignment of " + img_filename + ".")
+        return -1
 
     # Get the coordinates of the selected star in both images
-    ref_star_coords_image1 = (base_sources['xcentroid'][reference_star_index], base_sources['ycentroid'][reference_star_index])
-    ref_star_coords_image2 = (img_sources['xcentroid'][reference_star_index], img_sources['ycentroid'][reference_star_index])
+    ref_star_coords_image1 = (base_sources['xcentroid'][base_star_idx], base_sources['ycentroid'][base_star_idx])
+    ref_star_coords_image2 = (img_sources['xcentroid'][img_star_idx], img_sources['ycentroid'][img_star_idx])
 
     # Calculate the shift needed to align the images
     shift_x = ref_star_coords_image1[0] - ref_star_coords_image2[0]
@@ -69,7 +92,8 @@ def align(base_sources, img_sources, img_filename):
         hdul_out.writeto(ALIGNED_PATH + img_filename, overwrite=True)
 
     print(f"Aligning images with a shift of ({shift_x}, {shift_y}) pixels as {ALIGNED_PATH + img_filename}.")
-    
+    return 0
+
 
 """
 Crops all images in the directory to the minimum sized image of the set
@@ -124,7 +148,7 @@ def blur_background(filename, sources):
         
         # Combine the original image with the darkened blurred image using the masks
         final_image = image * inverted_mask + blurred_image * mask
-
+        final_image=  image
         # Save the background-subtracted and darkened image to a new FITS file
         output_filename = GAUSSIANBLUR_PATH + filename
         hdu = fits.PrimaryHDU(final_image, header=hdul[0].header)
@@ -264,7 +288,6 @@ def detect_objects_with_visualizer(filename):
     cid = fig.canvas.mpl_connect('button_press_event', onclick)
     plt.show()
 
-
 """
 Helper for choosing random base image for pixel diffencing 
 """
@@ -274,7 +297,6 @@ def get_random_files(directory, num_files):
 
 
 if __name__ == "__main__":
-
     fits_files = [filename for filename in os.listdir(INPUT_PATH) if filename.lower().endswith('.fits')]
     # Delete prev test files with os.remove here if needed
     if len(fits_files) < 2:
@@ -337,4 +359,3 @@ if __name__ == "__main__":
                 os.rename(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename)
                 print(f"Flagged {filename} for classification.")
 
-    
