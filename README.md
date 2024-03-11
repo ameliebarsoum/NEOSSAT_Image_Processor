@@ -12,7 +12,7 @@ _Step 3:_
 Run
 
 ```
-$ cd ../../..
+$ cd ../../../../../
 $ cd ObjectDetection
 $ mkdir mission_images
 ```
