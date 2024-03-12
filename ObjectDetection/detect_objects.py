@@ -53,7 +53,7 @@ def find_closest_star(ref_coords, candidates):
             closest_index = i
     if min_distance > 10:
         return -1
-    return closest_index
+    return closest_index, min_distance
 
 """
 @base_sources: sources from an image with which the other image will be aligned to
@@ -68,8 +68,8 @@ def align(base_sources, img_sources, img_filename):
     # Ignore brightest, it is the most likely of being a cosmic ray/comet/etc which moves.
     sorted_indices = sorted_indices[1:]
     for idx in sorted_indices:
-        img_star_idx = find_closest_star((base_sources[idx]['xcentroid'], base_sources[idx]['ycentroid']), img_sources)
-        if img_star_idx != -1:
+        img_star_idx, distance = find_closest_star((base_sources[idx]['xcentroid'], base_sources[idx]['ycentroid']), img_sources)
+        if img_star_idx != -1 and distance < 0.1:
             base_star_idx = idx
             break
     
