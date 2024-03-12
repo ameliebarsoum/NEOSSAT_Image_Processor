@@ -15,7 +15,7 @@ from ccdproc import CCDData, trim_image, combine
 import warnings 
 warnings.filterwarnings("ignore")
 
-INPUT_PATH = '../n1fits/mission/image/outgoing/ASTRO/'
+INPUT_PATH = 'comet_leonard/'
 ALIGNED_PATH = 'aligned/'
 GAUSSIANBLUR_PATH = 'gaussian_blur/'
 DIFFERENCED_PATH = 'differenced/'
@@ -41,22 +41,19 @@ def detect_objects(filepath):
     return sources
 
 """
-Helper function that finds the indices of the closest stars in the two images
+Helper function to find the closest star to a reference star
 """
-def find_closest_stars(star_coordinates_base, star_coordinates_img):
-    closest_idx_base = -1
-    closest_idx_img = -1
-    min_distance = 1000
-    for i, star_base in enumerate(star_coordinates_base):
-        for j, star_img in enumerate(star_coordinates_img):
-            distance = np.sqrt((star_base[0] - star_img[0]) ** 2 + (star_base[1] - star_img[1]) ** 2)
-            if distance < min_distance:
-                min_distance = distance
-                closest_idx_base = i
-                closest_idx_img = j
-    if min_distance > 20:
-        print("No matching stars found for alignment. Returning closest stars.")
-    return closest_idx_base, closest_idx_img
+def find_closest_star(ref_coords, candidates):
+    min_distance = np.inf
+    closest_index = -1
+    for i, candidate in enumerate(candidates):
+        distance = np.sqrt((candidate['xcentroid'] - ref_coords[0]) ** 2 + (candidate['ycentroid'] - ref_coords[1]) ** 2)
+        if distance < min_distance:
+            min_distance = distance
+            closest_index = i
+    if min_distance > 10:
+        return -1
+    return closest_index
 
 """
 @base_sources: sources from an image with which the other image will be aligned to
@@ -65,13 +62,19 @@ def find_closest_stars(star_coordinates_base, star_coordinates_img):
 description: Aligns one image to another based on the brightest star, such that their stars overlap.
 """
 def align(base_sources, img_sources, img_filename):
-    
-    star_coordinates_base = np.array([base_sources['xcentroid'], base_sources['ycentroid']]).T
-    star_coordinates_img = np.array([img_sources['xcentroid'], img_sources['ycentroid']]).T
-    base_star_idx, img_star_idx = find_closest_stars(star_coordinates_base, star_coordinates_img)
 
-    if base_star_idx == -1 or img_star_idx == -1:
-        print("No matching stars found for alignment of " + img_filename + ".")
+    # If no matching stars are found, try to find the closest star to the brightest star in the base image
+    sorted_indices = np.argsort(base_sources['flux'])[::-1]
+    # Ignore brightest, it is the most likely of being a cosmic ray/comet/etc which moves.
+    sorted_indices = sorted_indices[1:]
+    for idx in sorted_indices:
+        img_star_idx = find_closest_star((base_sources[idx]['xcentroid'], base_sources[idx]['ycentroid']), img_sources)
+        if img_star_idx != -1:
+            base_star_idx = idx
+            break
+    
+    if img_star_idx == -1:
+        print(f"Failed to find a matching star for alignment. Not moving forward with {img_filename}.")
         return -1
 
     # Get the coordinates of the selected star in both images
@@ -148,7 +151,7 @@ def blur_background(filename, sources):
         
         # Combine the original image with the darkened blurred image using the masks
         final_image = image * inverted_mask + blurred_image * mask
-        final_image=  image
+
         # Save the background-subtracted and darkened image to a new FITS file
         output_filename = GAUSSIANBLUR_PATH + filename
         hdu = fits.PrimaryHDU(final_image, header=hdul[0].header)
