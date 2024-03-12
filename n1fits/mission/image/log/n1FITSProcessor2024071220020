@@ -1,0 +1,10 @@
+
+************************************************************************
+************************************************************************
+2024-03-11 18:00:20,654 - n1 Image Processor - INFO - Image processing Exception Detected...
+<class 'FileNotFoundError'> occured.
+2024-03-11 18:00:20,654 - n1 Image Processor - INFO - Traceback (most recent call last):
+  File "/Users/ameliebarsoum/Desktop/ECSE_458/NEOSSAT_Image_Processor/n1fits/bin/launch_fits.py", line 140, in <module>
+    for file in listdir(incoming):
+FileNotFoundError: [Errno 2] No such file or directory: '/Users/ameliebarsoum/Desktop/ECSE_458/NEOSSAT_Image_Processor/n1fits/mission/image/fits_processor/incoming/'
+

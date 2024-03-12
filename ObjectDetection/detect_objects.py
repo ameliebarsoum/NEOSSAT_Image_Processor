@@ -24,6 +24,44 @@ GAUSSIANBLUR_PATH = 'gaussian_blur/'
 DIFFERENCED_PATH = 'differenced/'
 FLAGGED_PATH = 'flagged/'
 
+def find_closest_star(ref_coords, candidates):
+    min_distance = np.inf
+    closest_index = -1
+    for i, candidate in enumerate(candidates):
+        distance = np.sqrt((candidate['xcentroid'] - ref_coords[0]) ** 2 + (candidate['ycentroid'] - ref_coords[1]) ** 2)
+        if distance < min_distance:
+            min_distance = distance
+            closest_index = i
+    return closest_index
+
+def align(sources_image1, sources_image2, image2_filename):
+    # Choose the brightest star from the first image for alignment
+    reference_star_index = np.argmax(sources_image1['flux'])
+    ref_star_coords_image1 = (sources_image1['xcentroid'][reference_star_index], sources_image1['ycentroid'][reference_star_index])
+    
+    # Find the closest star in the second image to the reference star from the first image
+    closest_index = find_closest_star(ref_star_coords_image1, sources_image2)
+    if closest_index == -1:
+        print("No matching star found for alignment.")
+        return
+
+    ref_star_coords_image2 = (sources_image2['xcentroid'][closest_index], sources_image2['ycentroid'][closest_index])
+
+    # Calculate the shift needed to align the images
+    shift_x = ref_star_coords_image1[0] - ref_star_coords_image2[0]
+    shift_y = ref_star_coords_image1[1] - ref_star_coords_image2[1]
+
+    # Shift one image relative to the other using interpolation
+    with fits.open(GAUSSIANBLUR_PATH + image2_filename, mode='update') as hdul:
+        shifted_data = shift(hdul[0].data, (shift_y, shift_x), mode='nearest')
+        hdul[0].data = shifted_data
+        
+        hdu = fits.PrimaryHDU(shifted_data, header=hdul[0].header)
+        hdul_out = fits.HDUList([hdu])
+        hdul_out.writeto(ALIGNED_PATH + image2_filename, overwrite=True)
+    print(f"Aligning images with a shift of ({shift_x}, {shift_y}) pixels as {ALIGNED_PATH + image2_filename}.")
+
+'''
 def align(sources_image1, sources_image2, image2_filename):
 
     # Choose a star present in both images for alignment - assume brightest star is present in both
@@ -47,11 +85,12 @@ def align(sources_image1, sources_image2, image2_filename):
         hdul_out.writeto(ALIGNED_PATH + image2_filename, overwrite=True)
     print(f"Aligning images with a shift of ({shift_x}, {shift_y}) pixels as {ALIGNED_PATH + image2_filename}.")
 
+'''
 
 def detect_objects(filepath):
     # Open the FITS file
     with fits.open(filepath) as hdul:
-        data = hdul[0].data  # Accessing the data from the primary HDU
+        data = hdul[0].data
 
     # Calculate background statistics
     mean, median, std = sigma_clipped_stats(data, sigma=3.0)
@@ -60,7 +99,10 @@ def detect_objects(filepath):
     daofind = DAOStarFinder(fwhm=10.0, threshold=30.*std)
     sources = daofind(data - median)
 
-    return sources
+    if sources is None:  # If DAOStarFinder found no sources
+        return []  # Return an empty list instead of None
+    else:
+        return sources
 
 """
 Subtract backgrounds of image located at @filename
@@ -248,20 +290,24 @@ if __name__ == "__main__":
         if filename.lower().endswith('.fits'):
             sources = detect_objects(DIFFERENCED_PATH + filename)
             # Move files with stars detected into flagged folder
-            if sources is None or len(sources) != 0:
+            if sources:
+                
                 with fits.open(DIFFERENCED_PATH + filename, mode='update') as hdul:
                     header = hdul[0].header
                 
                     # Add detected source information to the header for each source
                     for i, source in enumerate(sources):
-                        header[f'XCENTER_{i}'] = (source['xcentroid'], f'X centroid of detected source {i}')
-                        header[f'YCENTER_{i}'] = (source['ycentroid'], f'Y centroid of detected source {i}')
+                        header[f'XCENT_{i}'] = (source['xcentroid'], f'X centroid of detected source {i}')
+                        header[f'YCENT_{i}'] = (source['ycentroid'], f'Y centroid of detected source {i}')
                 
                     # Save changes to header
                     hdul.flush()  # Writes the updated header to the file
-            
+                
                 # Now move the updated file to the flagged folder
                 os.rename(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename)
                 print(f"Flagged {filename} for classification.")
+
+            else:
+                print("No sources detected.")
 
     
