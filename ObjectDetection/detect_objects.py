@@ -18,7 +18,7 @@ import logging
 logger = logging.getLogger()
 logger.setLevel(logging.CRITICAL)
 
-INPUT_PATH = 'comet_leonard/'#'../n1fits/mission/image/outgoing/ASTRO/'
+INPUT_PATH = '../n1fits/mission/image/outgoing/ASTRO/'
 ALIGNED_PATH = 'aligned/'
 GAUSSIANBLUR_PATH = 'gaussian_blur/'
 DIFFERENCED_PATH = 'differenced/'
@@ -194,8 +194,7 @@ def blur_background(filename, sources):
         
         # Combine the original image with the darkened blurred image using the masks
         final_image = image * inverted_mask + blurred_image * mask
-        final_image = image
-
+        final_image=  image
         # Save the background-subtracted and darkened image to a new FITS file
         output_filename = GAUSSIANBLUR_PATH + filename
         hdu = fits.PrimaryHDU(final_image, header=hdul[0].header)
