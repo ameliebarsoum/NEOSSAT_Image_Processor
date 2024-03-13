@@ -70,7 +70,8 @@ def send_email_with_fits(filepath, recipient_email, sender_email, sender_passwor
 if __name__ == "__main__":
 
     fn = "NEOS_SCI_2021317013021.fits"
-                
+
+    ## MOCK FOR TESTING ##           
     with fits.open(DIFFERENCED_PATH + fn, mode='update') as hdul:
         header = hdul[0].header
         header[f'XCENT_1'] = 1
