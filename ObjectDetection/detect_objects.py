@@ -311,7 +311,6 @@ Use astride to detect cosmic ray hits in the image
 """
 def streak_detection(path):
 
-    straightness_threshold = 0.8
     max_length = 500
     min_length = 15
 
@@ -319,7 +318,7 @@ def streak_detection(path):
     streak = Streak(path, min_points=40, area_cut=40, connectivity_angle=0.01, output_path=output_path)
     streak.detect()
 
-    # Remove very short, very long, very thick, and not-straight streaks
+    # Remove very short, very long, very thick streaks
     for streak_instance in streak.streaks: 
         x_min = streak_instance.get('x_min')
         x_max = streak_instance.get('x_max')
@@ -327,12 +326,7 @@ def streak_detection(path):
         y_max = streak_instance.get('y_max')
         length = ((x_max - x_min) ** 2 + (y_max - y_min) ** 2) ** 0.5
 
-        # Calculate straightness ratio
-        direct_distance = max(x_max - x_min, y_max - y_min)
-        straightness = direct_distance / length if length > 0 else 0
-
-        if length > max_length or length < min_length or straightness < straightness_threshold \
-          or streak_instance.get('area') > streak_instance.get('perimeter'):
+        if length > max_length or length < min_length or streak_instance.get('area') > streak_instance.get('perimeter'):
             streak.streaks.remove(streak_instance)
 
     if len(streak.streaks) == 0:
@@ -343,6 +337,7 @@ def streak_detection(path):
         os.makedirs(output_path)
     streak.write_outputs()
     streak.plot_figures()
+
     return streak
 
 """
