@@ -4,14 +4,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from photutils.detection import DAOStarFinder
 from astropy.stats import sigma_clipped_stats
-import numpy as np
 import cv2
 from scipy.ndimage import shift
 from skimage.transform import resize
 import random
-from astropy.nddata import CCDData
 from astropy.stats import mad_std
 from ccdproc import CCDData, trim_image, combine
+from astride import Streak
 import warnings 
 warnings.filterwarnings("ignore")
 import logging
@@ -20,17 +19,18 @@ logger.setLevel(logging.CRITICAL)
 
 INPUT_PATH = '../n1fits/mission/image/outgoing/ASTRO/'
 ALIGNED_PATH = 'aligned/'
-GAUSSIANBLUR_PATH = 'gaussian_blur/'
 DIFFERENCED_PATH = 'differenced/'
 FLAGGED_PATH = 'flagged/'
 STACKED_PATH = 'stacked/stacked_img.fits'
+FLAGGED_ORIGINAL_PATH = 'flagged_original/'
+CRH_PATH = 'cosmic_ray_hits/'
 
 """
-Input: Path to fits file
+Input: Path to fits file, and optionally: threshold, fwhm, sharplo, and roundlo for detection via DAOStarFinder
 Description: Detects objects in the image using the DAOStarFinder algorithm
 """
 def detect_objects(filepath, threshold=15, fwhm=10.0, sharplo=0.2, roundlo=-1.0):
-    # Open the FITS file
+
     with fits.open(filepath) as hdul:
         data = hdul[0].data  # Accessing the data from the primary HDU
 
@@ -196,7 +196,7 @@ def blur_background(filename, sources):
         final_image = image * inverted_mask + blurred_image * mask
         final_image=  image
         # Save the background-subtracted and darkened image to a new FITS file
-        output_filename = GAUSSIANBLUR_PATH + filename
+        output_filename = ALIGNED_PATH + filename
         hdu = fits.PrimaryHDU(final_image, header=hdul[0].header)
         hdul_out = fits.HDUList([hdu])
         hdul_out.writeto(output_filename, overwrite=True)
@@ -209,7 +209,7 @@ def image_stacker(ALIGNED_PATH):
     ccds = [CCDData.read(path, unit="adu") for path in paths]
     
     combined_image = combine(ccds,
-                             #output_file=STACKED_PATH,
+                             output_file=STACKED_PATH, # Comment out if you don't want to save the unblurred stacked image
                              method='average',
                              sigma_clip=True,
                              sigma_clip_low_thresh=3,
@@ -218,19 +218,18 @@ def image_stacker(ALIGNED_PATH):
                              sigma_clip_dev_func=mad_std,
                              mem_limit=350e6,
                              overwrite_output=True)
-    
 ##### Comment/Uncomment to apply Gaussian blur to the combined image #####
-    combined_image_np = combined_image.data.astype(np.float32)
-    blurred_image = cv2.GaussianBlur(combined_image_np, (5, 5), 2)
-    hdu = fits.PrimaryHDU(blurred_image, header=ccds[0].header)
-    hdul_out = fits.HDUList([hdu])
-    hdul_out.writeto(STACKED_PATH, overwrite=True)
+    # combined_image_np = combined_image.data.astype(np.float32)
+    # blurred_image = cv2.GaussianBlur(combined_image_np, (5, 5), 2)
+    # hdu = fits.PrimaryHDU(blurred_image, header=ccds[0].header)
+    # hdul_out = fits.HDUList([hdu])
+    # hdul_out.writeto(STACKED_PATH, overwrite=True)
     
-    return blurred_image
+    # return blurred_image
+#####
     return combined_image
 
 """
-Not used.
 Perform pixel differencing on two FITS files
 """
 def pixel_difference(image1_filename, image2_filename):
@@ -284,7 +283,7 @@ def pixel_difference_with_stack(image1_filename):
             diff_data = np.abs(data1 - data2)  # Calculate absolute difference
 
             # Save the difference image to a new FITS file
-            output_filename = DIFFERENCED_PATH + image1_filename.split(".")[0] + "_differenced.fits"
+            output_filename = DIFFERENCED_PATH + image1_filename
             hdu = fits.PrimaryHDU(diff_data, header=hdul1[0].header)
             hdul_out = fits.HDUList([hdu])
             hdul_out.writeto(output_filename, overwrite=True)
@@ -294,7 +293,7 @@ def pixel_difference_with_stack(image1_filename):
         return
 
 """
-Applies Gaussian blur to the background (non-sources) of image located at @filename based on peaks given by @sources
+Applies Gaussian blur
 """
 def blur(path):
     # Open the FITS file
@@ -307,6 +306,36 @@ def blur(path):
         hdul_out = fits.HDUList([hdu])
         hdul_out.writeto(path, overwrite=True)
 
+"""
+Use astride to detect cosmic ray hits in the image
+"""
+def streak_detection(path):
+    
+    output_path = CRH_PATH + path.split("/")[1].split(".")[0]
+    
+    streak = Streak(path, min_points=70, area_cut=45, output_path=output_path)
+    streak.detect()
+
+    # Remove very short and very long streaks
+    for streak_instance in streak.streaks: 
+        x_min = streak_instance.get('x_min')
+        x_max = streak_instance.get('x_max')
+        y_min = streak_instance.get('y_min')
+        y_max = streak_instance.get('y_max')
+        length = ((x_max - x_min) ** 2 + (y_max - y_min) ** 2) ** 0.5
+        if length > 500 or length < 30:
+            streak.streaks.remove(streak_instance)
+
+    print(f"Detected {len(streak.streaks)} cosmic ray hit(s) in {path}.")
+
+    if len(streak.streaks) == 0:
+        return None
+
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+
+    streak.write_outputs()
+    streak.plot_figures()
 
 """
 Visualizer for sources on a FITS image
@@ -338,7 +367,6 @@ def sources_with_visualizer(path, sources):
     plt.xlabel('X-axis')
     plt.ylabel('Y-axis')
 
-    # Adjust layout for better appearance
     plt.tight_layout()
 
     # Inspect pixel values interactively
@@ -364,7 +392,7 @@ def get_random_files(directory, num_files):
 
 
 if __name__ == "__main__":
-    
+
     fits_files = [filename for filename in os.listdir(INPUT_PATH) if filename.lower().endswith('.fits')]
     # Delete prev test files with os.remove here if needed
     if len(fits_files) < 2:
@@ -373,14 +401,21 @@ if __name__ == "__main__":
   
     if not os.path.exists(ALIGNED_PATH):
         os.makedirs(ALIGNED_PATH)
-    if not os.path.exists(GAUSSIANBLUR_PATH):
-        os.makedirs(GAUSSIANBLUR_PATH)
     if not os.path.exists(DIFFERENCED_PATH):
         os.makedirs(DIFFERENCED_PATH) 
     if not os.path.exists(FLAGGED_PATH):
         os.makedirs(FLAGGED_PATH) 
     if not os.path.exists("stacked"):
         os.makedirs("stacked")
+    if not os.path.exists(FLAGGED_ORIGINAL_PATH):
+        os.makedirs(FLAGGED_ORIGINAL_PATH)
+    if not os.path.exists(CRH_PATH):
+        os.makedirs(CRH_PATH)
+
+    # Cosmic ray hit detection (works best on raw images)
+    for filename in os.listdir(INPUT_PATH):
+        if filename.lower().endswith('.fits'):
+            streak_detection(INPUT_PATH + filename)
 
     # Alignment
     source_tuples = []
@@ -393,7 +428,6 @@ if __name__ == "__main__":
         while num_stars < 1 and threshold >= 1:
             cur_source = detect_objects(INPUT_PATH + filename)
             num_stars = len(cur_source)
-            #blur_background(filename, cur_source)
             threshold -= 3
         source_tuples.append((cur_source, filename))
         if num_stars > max_stars:
@@ -407,7 +441,7 @@ if __name__ == "__main__":
         print("No FITS files found in the specified directory.")
         exit()
 
-    # Crop
+    # Crop to same size
     crop_all(ALIGNED_PATH)
     
     # Pixel Differencing
@@ -421,20 +455,21 @@ if __name__ == "__main__":
                     comparison_path = os.path.join(ALIGNED_PATH, comparison_filename)
                     pixel_difference(base_path, comparison_path)
     else: 
-        # Create a (blurred) stacked image
+        # Create a stacked image
         stacked_image = image_stacker(ALIGNED_PATH=ALIGNED_PATH)
         # Perform pixel differencing with all blurred & aligned images
         for filename in os.listdir(ALIGNED_PATH):
             if filename.lower().endswith('.fits'):
-                blur(os.path.join(ALIGNED_PATH, filename))
                 pixel_difference_with_stack(filename)
+                # Gaussian Blur of differenced images before object detection
+                blur(DIFFERENCED_PATH + filename)
 
-    # Object detection on difference images
+    # Object detection on differenced images
     for filename in os.listdir(DIFFERENCED_PATH):
         if filename.lower().endswith('.fits'):
             sources = detect_objects(DIFFERENCED_PATH + filename, threshold=60, fwhm=17, sharplo=0.5, roundlo=-0.8)
             # Move files with stars detected into flagged folder
             if sources is not None and len(sources) > 0:
-                #sources_with_visualizer(DIFFERENCED_PATH + filename, sources)
-                os.rename(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename)
                 print(f"Flagged {filename} for classification.")
+                os.rename(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename)
+                os.rename(INPUT_PATH + filename, FLAGGED_ORIGINAL_PATH + filename)      
