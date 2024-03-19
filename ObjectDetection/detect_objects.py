@@ -183,41 +183,6 @@ def crop_all(ALIGNED_PATH):
     print(f"Cropped files to the minimum size of the set: {trimmed_ccd.shape}")
 
 """
-Applies Gaussian blur to the background (non-sources) of image located at @filename based on peaks given by @sources
-"""
-def blur_background(filename, sources):
-    # Open the FITS file
-    with fits.open(INPUT_PATH + filename) as hdul:
-        image = hdul[0].data  # Accessing the data from the primary HDU
-
-        # Create a mask to exclude areas around bright points
-        mask = np.ones_like(image, dtype=np.float32)  # Initialize mask with ones (full image)
-        blur_radius = 4  # Define the radius around bright points to exclude from blurring
-
-        x_positions = sources['xcentroid']
-        y_positions = sources['ycentroid']
-        for i in range(len(sources)):
-            x = x_positions[i]
-            y = y_positions[i]
-            # Exclude a circular region around each bright point from the mask
-            yy, xx = np.ogrid[:image.shape[0], :image.shape[1]]
-            mask_value = np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * blur_radius ** 2))
-            mask *= (1 - mask_value)
-
-        # Apply Gaussian blur to the image using the inverted mask
-        inverted_mask = 1 - mask
-        blurred_image = cv2.GaussianBlur(image.astype(np.float32), (5, 5), 2)
-        
-        # Combine the original image with the darkened blurred image using the masks
-        final_image = image * inverted_mask + blurred_image * mask
-        final_image=  image
-        # Save the background-subtracted and darkened image to a new FITS file
-        output_filename = ALIGNED_PATH + filename
-        hdu = fits.PrimaryHDU(final_image, header=hdul[0].header)
-        hdul_out = fits.HDUList([hdu])
-        hdul_out.writeto(output_filename, overwrite=True)
-
-"""
 Perform image stacking on a set of FITS files to reduce noise for pixel differencing
 """
 def image_stacker(ALIGNED_PATH):
@@ -354,41 +319,6 @@ def streak_detection(path):
     return [(streak_instance.get('x_center'), streak_instance.get('y_center')) for streak_instance in streak.streaks]
 
 """
-Visualizer for sources on a FITS image
-"""
-def sources_with_visualizer(path, sources):
-    # Open the FITS file
-    with fits.open(path) as hdul:
-        data = hdul[0].data  # Accessing the data from the primary HDU
-
-    # Display the image
-    # First plot: FITS Image
-    plt.figure(figsize=(12, 6))
-
-    # Create subplot 1 (1 row, 2 columns, first plot)
-    plt.subplot(1, 2, 1)
-    plt.imshow(data, cmap='twilight', origin='upper', vmax=500)
-    plt.colorbar(label='Pixel Value')
-    plt.title(f'FITS file: {path}')
-    plt.xlabel('X-axis')
-    plt.ylabel('Y-axis')
-
-    # Second plot: Detected Stars
-    # Create subplot 2 (1 row, 2 columns, second plot)
-    plt.subplot(1, 2, 2)
-    plt.imshow(data, cmap='twilight', origin='upper', vmax=500)
-    plt.colorbar(label='Pixel Value')
-    plt.scatter(sources['xcentroid'], sources['ycentroid'], s=50, edgecolor='red', facecolor='none', marker='o')
-    plt.title('Detected Stars')
-    plt.xlabel('X-axis')
-    plt.ylabel('Y-axis')
-
-    plt.tight_layout()
-    plt.show()
-
-    return sources
-
-"""
 Parameters: input path to fits image, output path, sources
 Save image with circled sources to flagged directory
 """
@@ -504,7 +434,6 @@ if __name__ == "__main__":
             sources = remove_duplicates(file_sources[filename], stacked_image_coordinates)
         
             if sources is not None and len(sources) > 0:
-                # sources_with_visualizer(DIFFERENCED_PATH + filename, sources)
                 print(f"Flagged {filename} for classification.")            
                 save_flagged_image(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename.split(".")[0] + ".png", sources)
                 save_flagged_image(INPUT_PATH + filename, FLAGGED_ORIGINAL_PATH + filename.split(".")[0] + ".png", sources)     
