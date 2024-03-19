@@ -43,15 +43,30 @@ def detect_objects(filepath, threshold=15, fwhm=10.0, sharplo=0.2, roundlo=-1.0)
     return sources
 
 """
+Parameters: Two lists of tuples representing x, y coordinates of sources
+Returns: List 1 without any sources that are within a given number of pixels of any source in List 2
+"""
+def remove_duplicates(source1, source2, threshold=0.1):
+    for i in range(len(source1)):
+        for j in range(len(source2)):
+            if np.sqrt((source1[i][0] - source2[j][0]) ** 2 + (source1[i][1] - source2[j][1]) ** 2) < threshold:
+                source1.pop(i)
+                break
+    return source1
+
+"""
 Helper to deal with DAOStarFinder QTable
 """
-def qtable_to_tuples(qtable):
+def qtable_to_tuples(qtable, id=True):
     tuples_list = []
     for row in qtable:
         x_centroid = row['xcentroid']
         y_centroid = row['ycentroid']
-        obj_id = row['id']
-        tuples_list.append((x_centroid, y_centroid, obj_id))
+        if id:
+            obj_id = row['id']
+            tuples_list.append((x_centroid, y_centroid, obj_id))
+        else:
+            tuples_list.append((x_centroid, y_centroid))
     return tuples_list
 
 """
@@ -76,26 +91,27 @@ This is done to ensure that the shift found can be validated against another pai
 """
 def find_closest_pair(tuples):
     closest_pair = None
-    min_distance = float('inf')
+    max_distance = 10
+    min_distance_pair = 0.5
     
     for i in range(len(tuples)):
         distance1, id1, id2 = tuples[i]
-        
         for j in range(i + 1, len(tuples)):
             distance2, id3, id4 = tuples[j]
-            
-            if abs(distance2 - distance1) < 1 and not (id1 == id3 or id1 == id4 or id2 == id3 or id2 == id4):
-                if distance1 < min_distance:
-                    min_distance = distance1
-                    closest_pair = (distance1, id1, id2)
-                if distance2 < min_distance:
-                    min_distance = distance2
-                    closest_pair = (distance2, id3, id4)
-                    
+
+            distance_pair = abs(distance2 - distance1)
+
+            # Shift should be less than max_distance
+            if distance1 < max_distance and distance2 < max_distance and not (id1 == id3 or id1 == id4 or id2 == id3 or id2 == id4):
+                # Shift should "match" at least one other pair to a closeness of min_distance_pair
+                if distance_pair < min_distance_pair:
+                    closest_pair = (min(distance1, distance2), id1, id2)
+                    min_distance_pair = distance_pair
+                
     return closest_pair
 
 """
-@base_sources: sources from an image with which the other image will be aligned t
+@base_sources: sources from an image with which the other image will be aligned to
 @img_sources: sources from the image to be aligned
 @img_filename: filename of the image to be aligned
 description: Aligns one image to another based on the brightest star, such that their stars overlap.
@@ -130,7 +146,7 @@ def align(base_sources, img_sources, img_filename):
     shift_y = ref_star_coords_image1[1] - ref_star_coords_image2[1]
 
     # Shift one image relative to the other using interpolation
-    with fits.open(INPUT_PATH + img_filename) as hdul:  # Change to GAUSSIANBLUR_PATH if using blur_background
+    with fits.open(INPUT_PATH + img_filename) as hdul: 
         shifted_data = shift(hdul[0].data, (shift_y, shift_x), mode='nearest')
         hdul[0].data = shifted_data
         
@@ -139,7 +155,7 @@ def align(base_sources, img_sources, img_filename):
         hdul_out.writeto(ALIGNED_PATH + img_filename, overwrite=True)
 
     print(f"Aligning images with a shift of ({shift_x}, {shift_y}) pixels as {ALIGNED_PATH + img_filename}.")
-    return 0
+    return (shift_x, shift_y) 
 
 """
 Crops all images in the directory to the minimum sized image of the set
@@ -226,17 +242,13 @@ def image_stacker(ALIGNED_PATH):
     # hdul_out.writeto(STACKED_PATH, overwrite=True)
     
     # return blurred_image
-#####
+# #####
     return combined_image
 
 """
 Perform pixel differencing on two FITS files
 """
-def pixel_difference(image1_filename, image2_filename):
-
-    image1_file = os.path.join(ALIGNED_PATH, image1_filename)
-    image2_file = os.path.join(ALIGNED_PATH, image2_filename)
-
+def pixel_difference(image1_file, image2_file, idx):
     try:
         with fits.open(image1_file) as hdul1, fits.open(image2_file) as hdul2:
             data1 = hdul1[0].data
@@ -253,7 +265,7 @@ def pixel_difference(image1_filename, image2_filename):
             diff_data = np.abs(data1 - data2)  # Calculates absolute difference
 
             # Save the difference image to a new FITS file
-            output_filename = DIFFERENCED_PATH + image2_filename
+            output_filename = DIFFERENCED_PATH + image1_file.split("/")[-1].split(".")[0] + "_" + idx + ".fits"
             hdu = fits.PrimaryHDU(diff_data, header=hdul1[0].header)
             hdul_out = fits.HDUList([hdu])
             hdul_out.writeto(output_filename, overwrite=True)
@@ -280,7 +292,7 @@ def pixel_difference_with_stack(image1_filename):
                 data2 = resize(data2, min_shape, mode='edge')
 
             # Perform pixel-wise difference
-            diff_data = np.abs(data1 - data2)  # Calculate absolute difference
+            diff_data = data1 - data2 
 
             # Save the difference image to a new FITS file
             output_filename = DIFFERENCED_PATH + image1_filename
@@ -312,7 +324,7 @@ Use astride to detect cosmic ray hits in the image
 def streak_detection(path):
 
     max_length = 500
-    min_length = 15
+    min_length = 1
 
     output_path = CRH_PATH + path.split("/")[1].split(".")[0]
     streak = Streak(path, min_points=40, area_cut=40, connectivity_angle=0.01, output_path=output_path)
@@ -338,7 +350,8 @@ def streak_detection(path):
     streak.write_outputs()
     streak.plot_figures()
 
-    return streak
+    # Return list of tuples of x_center, y_center of cosmic ray hits
+    return [(streak_instance.get('x_center'), streak_instance.get('y_center')) for streak_instance in streak.streaks]
 
 """
 Visualizer for sources on a FITS image
@@ -354,7 +367,7 @@ def sources_with_visualizer(path, sources):
 
     # Create subplot 1 (1 row, 2 columns, first plot)
     plt.subplot(1, 2, 1)
-    plt.imshow(data, cmap='viridis', origin='lower')
+    plt.imshow(data, cmap='twilight', origin='upper', vmax=500)
     plt.colorbar(label='Pixel Value')
     plt.title(f'FITS file: {path}')
     plt.xlabel('X-axis')
@@ -363,7 +376,7 @@ def sources_with_visualizer(path, sources):
     # Second plot: Detected Stars
     # Create subplot 2 (1 row, 2 columns, second plot)
     plt.subplot(1, 2, 2)
-    plt.imshow(data, cmap='viridis', origin='lower', vmax=500)
+    plt.imshow(data, cmap='twilight', origin='upper', vmax=500)
     plt.colorbar(label='Pixel Value')
     plt.scatter(sources['xcentroid'], sources['ycentroid'], s=50, edgecolor='red', facecolor='none', marker='o')
     plt.title('Detected Stars')
@@ -371,20 +384,29 @@ def sources_with_visualizer(path, sources):
     plt.ylabel('Y-axis')
 
     plt.tight_layout()
-
-    # Inspect pixel values interactively
-    def onclick(event):
-        x, y = int(event.xdata), int(event.ydata)
-        print(f"Pixel value at (x={x}, y={y}): {data[y, x]}")  # Accessing pixel value
-
-    fig, ax = plt.subplots()
-    ax.imshow(data, cmap='viridis', origin='lower')
-    plt.title('Click on the image to get pixel value')
-
-    cid = fig.canvas.mpl_connect('button_press_event', onclick)
     plt.show()
 
     return sources
+
+"""
+Parameters: input path to fits image, output path, sources
+Save image with circled sources to flagged directory
+"""
+def save_flagged_image(input_path, output_path, sources):
+    with fits.open(input_path) as hdul:
+        image_data = hdul[0].data
+
+    # Plot the image data
+    plt.figure(figsize=(10, 10))
+    plt.imshow(image_data, cmap='gray', origin='lower', norm=plt.Normalize(vmin=np.percentile(image_data, 5), vmax=np.percentile(image_data, 95)))
+    
+    for i in range(0,len(sources)):
+        plt.scatter(sources[i][0], sources[i][1], s=100, facecolors='none', edgecolors='r')
+
+    # Save the image to the output path as PNG
+    plt.axis('off')  # Optional: Turn off the axis
+    plt.savefig(output_path, bbox_inches='tight', pad_inches=0)
+    plt.close()
 
 """
 Helper for choosing random base image for pixel diffencing 
@@ -415,64 +437,74 @@ if __name__ == "__main__":
     if not os.path.exists(CRH_PATH):
         os.makedirs(CRH_PATH)
 
-    # Cosmic ray hit detection (works best on raw images)
-    for filename in os.listdir(INPUT_PATH):
-        if filename.lower().endswith('.fits'):
-            streak_detection(INPUT_PATH + filename)
+    # Initialize dictionary to store cosmic ray hits' + detected objects' coordinates for each file
+    file_sources = {}            
 
     # Alignment
     source_tuples = []
     base_source = None
+    max_stars = -1
     for filename in fits_files:
         num_stars = 0
         threshold = 15
         # Find the file with the most detected objects to use as the base for optimal alignment
-        max_stars = -1
         while num_stars < 1 and threshold >= 1:
             cur_source = detect_objects(INPUT_PATH + filename)
             num_stars = len(cur_source)
             threshold -= 3
+        if threshold < 12:
+            print(f"Detected {num_stars} objects in {filename} with threshold {threshold}.")
         source_tuples.append((cur_source, filename))
-        if num_stars > max_stars:
-            max_stars = num_stars
-            base_source = cur_source
+    
+    # Select the source with the median detected objects as the base for alignment
+    source_tuples.sort(key=lambda x: len(x[0]))
+    base_source = source_tuples[len(source_tuples) // 2][0]
+    print(f"Using {source_tuples[len(source_tuples) // 2][1]} having {len(base_source)} detected sources as the base for alignment .")
 
     for source in source_tuples:
         align(base_source, source[0], source[1])
 
-    if base_source is None:
-        print("No FITS files found in the specified directory.")
-        exit()
+    # Cosmic ray hit detection (works best on raw images)
+    for filename in fits_files:
+        streak_coords = streak_detection(ALIGNED_PATH + filename)
+        if streak_coords is not None:
+            file_sources[filename] = streak_coords    
 
     # Crop to same size
     crop_all(ALIGNED_PATH)
     
     # Pixel Differencing
-    if len(fits_files) < 4:
-        fits_files = [filename for filename in os.listdir(INPUT_PATH) if filename.lower().endswith('.fits')]
-        # Iterate through each file and compare it to every other file
+    if len(fits_files) == 2 or len(fits_files) == 3:
         for i, base_filename in enumerate(fits_files):
             for j, comparison_filename in enumerate(fits_files):
-                if i != j:  # Avoid comparing a file to itself
+                if i != j: 
                     base_path = os.path.join(ALIGNED_PATH, base_filename)
                     comparison_path = os.path.join(ALIGNED_PATH, comparison_filename)
-                    pixel_difference(base_path, comparison_path)
+                    pixel_difference(base_path, comparison_path, str(i) + str(j))
     else: 
         # Create a stacked image
         stacked_image = image_stacker(ALIGNED_PATH=ALIGNED_PATH)
-        # Perform pixel differencing with all blurred & aligned images
-        for filename in os.listdir(ALIGNED_PATH):
-            if filename.lower().endswith('.fits'):
-                pixel_difference_with_stack(filename)
-                # Gaussian Blur of differenced images before object detection
-                blur(DIFFERENCED_PATH + filename)
+        stacked_image_coordinates = qtable_to_tuples(detect_objects(STACKED_PATH), id=False)
 
-    # Object detection on differenced images
-    for filename in os.listdir(DIFFERENCED_PATH):
-        if filename.lower().endswith('.fits'):
-            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=60, fwhm=17, sharplo=0.5, roundlo=-0.8)
-            # Move files with stars detected into flagged folder
+        # Perform pixel differencing with all aligned images
+        for filename in fits_files:
+            # Apply Gaussian blur here if needed
+            pixel_difference_with_stack(filename)
+            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=60, fwhm=20, sharplo=0.5, roundlo=-0.8)
+            if sources is None or len(sources) < 1:
+                print(f"No objects detected in {filename}.")
+                continue
+            print(f"Detected {len(sources)} objects in {filename}.")
+
+            if filename in file_sources and file_sources[filename] is not None:
+                file_sources[filename] = qtable_to_tuples(sources, id=False) + file_sources[filename]
+            else:
+                file_sources[filename] = qtable_to_tuples(sources, id=False)
+
+            sources = remove_duplicates(file_sources[filename], stacked_image_coordinates)
+        
             if sources is not None and len(sources) > 0:
-                print(f"Flagged {filename} for classification.")
-                os.rename(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename)
-                os.rename(INPUT_PATH + filename, FLAGGED_ORIGINAL_PATH + filename)      
+                # sources_with_visualizer(DIFFERENCED_PATH + filename, sources)
+                print(f"Flagged {filename} for classification.")            
+                save_flagged_image(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename.split(".")[0] + ".png", sources)
+                save_flagged_image(INPUT_PATH + filename, FLAGGED_ORIGINAL_PATH + filename.split(".")[0] + ".png", sources)     
