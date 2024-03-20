@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from photutils.detection import DAOStarFinder
 from astropy.stats import sigma_clipped_stats
 import cv2
-from scipy.ndimage import shift
+from scipy.ndimage import shift, median_filter
 from skimage.transform import resize
 import random
 from astropy.stats import mad_std
@@ -24,15 +24,17 @@ FLAGGED_PATH = 'flagged/'
 STACKED_PATH = 'stacked/stacked_img.fits'
 FLAGGED_ORIGINAL_PATH = 'flagged_original/'
 CRH_PATH = 'cosmic_ray_hits/'
-
 """
 Input: Path to fits file, and optionally: threshold, fwhm, sharplo, and roundlo for detection via DAOStarFinder
 Description: Detects objects in the image using the DAOStarFinder algorithm
 """
-def detect_objects(filepath, threshold=15, fwhm=10.0, sharplo=0.2, roundlo=-1.0):
+def detect_objects(filepath, threshold=15, fwhm=10.0, sharplo=0.2, roundlo=-1.0, filter=False):
 
     with fits.open(filepath) as hdul:
         data = hdul[0].data  # Accessing the data from the primary HDU
+    # Apply median filter to fits
+    if filter:
+        data = median_filter(data, 7)
 
     # Calculate background statistics
     mean, median, std = sigma_clipped_stats(data, sigma=3.0)
@@ -420,7 +422,7 @@ if __name__ == "__main__":
         for filename in fits_files:
             # Apply Gaussian blur here if needed
             pixel_difference_with_stack(filename)
-            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=60, fwhm=20, sharplo=0.5, roundlo=-0.8)
+            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=50, fwhm=30, sharplo=0.5, filter=True)
             if sources is None or len(sources) < 1:
                 print(f"No objects detected in {filename}.")
                 continue
