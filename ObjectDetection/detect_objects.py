@@ -28,10 +28,14 @@ CRH_PATH = 'cosmic_ray_hits/'
 Input: Path to fits file, and optionally: threshold, fwhm, sharplo, and roundlo for detection via DAOStarFinder
 Description: Detects objects in the image using the DAOStarFinder algorithm
 """
-def detect_objects(filepath, threshold=15, fwhm=10.0, sharplo=0.2, roundlo=-1.0, filter=False):
+def detect_objects(filepath, threshold=15, fwhm=10.0, sharplo=0.2, roundlo=-1.0, border=False, filter=True):
 
-    with fits.open(filepath) as hdul:
-        data = hdul[0].data  # Accessing the data from the primary HDU
+    try:
+        with fits.open(filepath) as hdul:
+            data = hdul[0].data  # Accessing the data from the primary HDU
+    except FileNotFoundError:
+        return None
+    
     # Apply median filter to fits
     if filter:
         data = median_filter(data, 7)
@@ -40,15 +44,26 @@ def detect_objects(filepath, threshold=15, fwhm=10.0, sharplo=0.2, roundlo=-1.0,
     mean, median, std = sigma_clipped_stats(data, sigma=3.0)
 
     # DAOStarFinder algorithm for star detection
-    daofind = DAOStarFinder(fwhm=fwhm, threshold=threshold*std, sharplo=sharplo, roundlo=roundlo)
+    daofind = DAOStarFinder(fwhm=fwhm, threshold=threshold*std, sharplo=sharplo, roundlo=roundlo, exclude_border=border)
     sources = daofind(data - median)
+
+    # Exclude sources along border for alignment
+    if border and sources is not None:
+        # Get image dimensions
+        ny, nx = data.shape
+        # Filter out sources within 5 pixels of the edge
+        mask = (sources['xcentroid'] > 5) & (sources['xcentroid'] < nx - 5) & \
+               (sources['ycentroid'] > 5) & (sources['ycentroid'] < ny - 5)
+        filtered_sources = sources[mask]
+        return filtered_sources
+
     return sources
 
 """
 Parameters: Two lists of tuples representing x, y coordinates of sources
 Returns: List 1 without any sources that are within a given number of pixels of any source in List 2
 """
-def remove_duplicates(source1, source2, threshold=0.1):
+def remove_duplicates(source1, source2, threshold=0.2):
     for i in range(len(source1)):
         for j in range(len(source2)):
             if np.sqrt((source1[i][0] - source2[j][0]) ** 2 + (source1[i][1] - source2[j][1]) ** 2) < threshold:
@@ -57,32 +72,16 @@ def remove_duplicates(source1, source2, threshold=0.1):
     return source1
 
 """
-Helper to deal with DAOStarFinder QTable
-"""
-def qtable_to_tuples(qtable, id=True):
-    tuples_list = []
-    for row in qtable:
-        x_centroid = row['xcentroid']
-        y_centroid = row['ycentroid']
-        if id:
-            obj_id = row['id']
-            tuples_list.append((x_centroid, y_centroid, obj_id))
-        else:
-            tuples_list.append((x_centroid, y_centroid))
-    return tuples_list
-
-"""
 List all distances between each base source and each img source
 Returns list of tuples of the distance, id of base source, id of img source
 """
-def find_all_distances_between(base_sources, img_sources):
-    base_tuples = qtable_to_tuples(base_sources)
-    img_tuples = qtable_to_tuples(img_sources)
+def find_all_distances_between(base_sources, img_sources, max_distance=15):
     distances = []
-    for base in base_tuples:
-        for img in img_tuples:
-            distance = np.sqrt((base[0] - img[0]) ** 2 + (base[1] - img[1]) ** 2)
-            distances.append((distance, base[2], img[2]))
+    for x_base, y_base, id_base in [(base_source['xcentroid'], base_source['ycentroid'], base_source['id']) for base_source in base_sources]:
+        for x_img, y_img, id_img in [(img_source['xcentroid'], img_source['ycentroid'], img_source['id']) for img_source in img_sources]:
+            distance = np.sqrt((x_base - x_img) ** 2 + (y_base - y_img) ** 2)
+            if distance <= max_distance: 
+                distances.append((distance, id_base, id_img))
     distances.sort(key=lambda x: x[0])
     return distances
 
@@ -93,23 +92,19 @@ This is done to ensure that the shift found can be validated against another pai
 """
 def find_closest_pair(tuples):
     closest_pair = None
-    max_distance = 10
-    min_distance_pair = 0.5
+    min_distance_pair = 0.1
     
     for i in range(len(tuples)):
         distance1, id1, id2 = tuples[i]
         for j in range(i + 1, len(tuples)):
             distance2, id3, id4 = tuples[j]
-
-            distance_pair = abs(distance2 - distance1)
-
-            # Shift should be less than max_distance
-            if distance1 < max_distance and distance2 < max_distance and not (id1 == id3 or id1 == id4 or id2 == id3 or id2 == id4):
+            if id3 not in (id1, id2) and id4 not in (id1, id2):
+                distance_pair = abs(distance2 - distance1)
                 # Shift should "match" at least one other pair to a closeness of min_distance_pair
                 if distance_pair < min_distance_pair:
-                    closest_pair = (min(distance1, distance2), id1, id2)
+                    closest_pair = (id1, id2, id3, id4)
                     min_distance_pair = distance_pair
-                
+
     return closest_pair
 
 """
@@ -124,21 +119,22 @@ def align(base_sources, img_sources, img_filename):
     
     if len(base_sources) == 1 or len(img_sources) == 1: # just take the smallest distance
         print("Only one star detected in one of the images. Using the closest star for alignment.")
-        min_distance, base_idx, img_idx = distances[0]
+        base_idx, img_idx, _, _ = distances[0]
     else:
         tuple = find_closest_pair(distances)
         if tuple is None:
             print("No matching stars found for alignment of " + img_filename + ". Not moving on with this file.")
             return -1
 
-        min_distance, base_idx, img_idx = tuple
-    
-    if min_distance > 100:
-        print("No matching stars found for alignment of " + img_filename + ". Not moving on with this file.")
-        return -1
+        base_idx, img_idx, second_base_idx, second_img_idx = tuple
     
     base_row = base_sources[base_sources['id'] == base_idx]
     img_row = img_sources[img_sources['id'] == img_idx]
+
+    base_row2 = base_sources[base_sources['id'] == second_base_idx]
+    img_row2 = img_sources[img_sources['id'] == second_img_idx]
+    ref_star_coords_image1_d = base_row2['xcentroid'][0], base_row2['ycentroid'][0]
+    ref_star_coords_image2_d = img_row2['xcentroid'][0], img_row2['ycentroid'][0]
 
     ref_star_coords_image1 = base_row['xcentroid'][0], base_row['ycentroid'][0]
     ref_star_coords_image2 = img_row['xcentroid'][0], img_row['ycentroid'][0]
@@ -146,6 +142,9 @@ def align(base_sources, img_sources, img_filename):
     # Calculate the shift needed to align the images
     shift_x = ref_star_coords_image1[0] - ref_star_coords_image2[0]
     shift_y = ref_star_coords_image1[1] - ref_star_coords_image2[1]
+
+    # Save png with stars used for alignment circled
+    save_flagged_image(INPUT_PATH + img_filename, ALIGNED_PATH + img_filename.split(".")[0] + ".png", [ref_star_coords_image1_d+ref_star_coords_image2_d +ref_star_coords_image1+ ref_star_coords_image2])
 
     # Shift one image relative to the other using interpolation
     with fits.open(INPUT_PATH + img_filename) as hdul: 
@@ -291,10 +290,13 @@ Use astride to detect cosmic ray hits in the image
 def streak_detection(path):
 
     max_length = 500
-    min_length = 1
+    min_length = 5
 
-    output_path = CRH_PATH + path.split("/")[1].split(".")[0]
-    streak = Streak(path, min_points=40, area_cut=40, connectivity_angle=0.01, output_path=output_path)
+    try:
+        output_path = CRH_PATH + path.split("/")[1].split(".")[0]
+        streak = Streak(path, min_points=40, area_cut=40, connectivity_angle=0.01, output_path=output_path)
+    except FileNotFoundError:
+        return None
     streak.detect()
 
     # Remove very short, very long, very thick streaks
@@ -331,7 +333,7 @@ def save_flagged_image(input_path, output_path, sources):
     # Plot the image data
     plt.figure(figsize=(10, 10))
     plt.imshow(image_data, cmap='gray', origin='lower', norm=plt.Normalize(vmin=np.percentile(image_data, 5), vmax=np.percentile(image_data, 95)))
-    
+
     for i in range(0,len(sources)):
         plt.scatter(sources[i][0], sources[i][1], s=100, facecolors='none', edgecolors='r')
 
@@ -369,8 +371,9 @@ if __name__ == "__main__":
     if not os.path.exists(CRH_PATH):
         os.makedirs(CRH_PATH)
 
-    # Initialize dictionary to store cosmic ray hits' + detected objects' coordinates for each file
-    file_sources = {}            
+    # Cosmic ray hit detection (works best on raw images)
+    for filename in fits_files:
+        streak_coords = streak_detection(INPUT_PATH + filename)       
 
     # Alignment
     source_tuples = []
@@ -378,15 +381,10 @@ if __name__ == "__main__":
     max_stars = -1
     for filename in fits_files:
         num_stars = 0
-        threshold = 15
-        # Find the file with the most detected objects to use as the base for optimal alignment
-        while num_stars < 1 and threshold >= 1:
-            cur_source = detect_objects(INPUT_PATH + filename)
-            num_stars = len(cur_source)
-            threshold -= 3
-        if threshold < 12:
-            print(f"Detected {num_stars} objects in {filename} with threshold {threshold}.")
+        cur_source = detect_objects(INPUT_PATH + filename, threshold=25, border=True) # Too many points = inaccurate alignment
+        num_stars = len(cur_source)
         source_tuples.append((cur_source, filename))
+        print(f"Detected {num_stars} objects in {filename}.")
     
     # Select the source with the median detected objects as the base for alignment
     source_tuples.sort(key=lambda x: len(x[0]))
@@ -395,12 +393,6 @@ if __name__ == "__main__":
 
     for source in source_tuples:
         align(base_source, source[0], source[1])
-
-    # Cosmic ray hit detection (works best on raw images)
-    for filename in fits_files:
-        streak_coords = streak_detection(ALIGNED_PATH + filename)
-        if streak_coords is not None:
-            file_sources[filename] = streak_coords    
 
     # Crop to same size
     crop_all(ALIGNED_PATH)
@@ -416,26 +408,24 @@ if __name__ == "__main__":
     else: 
         # Create a stacked image
         stacked_image = image_stacker(ALIGNED_PATH=ALIGNED_PATH)
-        stacked_image_coordinates = qtable_to_tuples(detect_objects(STACKED_PATH), id=False)
+        stacked_image_sources = detect_objects(STACKED_PATH)
+        stacked_image_coordinates = [(source['xcentroid'], source['ycentroid']) for source in stacked_image_sources] # this is probs wrong
 
         # Perform pixel differencing with all aligned images
         for filename in fits_files:
             # Apply Gaussian blur here if needed
             pixel_difference_with_stack(filename)
-            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=50, fwhm=30, sharplo=0.5, filter=True)
+            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=50, fwhm=25, sharplo=0.5)
             if sources is None or len(sources) < 1:
                 print(f"No objects detected in {filename}.")
                 continue
             print(f"Detected {len(sources)} objects in {filename}.")
+            print(f"Coordinates: {[(source['xcentroid'], source['ycentroid']) for source in sources]}")
 
-            if filename in file_sources and file_sources[filename] is not None:
-                file_sources[filename] = qtable_to_tuples(sources, id=False) + file_sources[filename]
-            else:
-                file_sources[filename] = qtable_to_tuples(sources, id=False)
-
-            sources = remove_duplicates(file_sources[filename], stacked_image_coordinates)
+            sources_coordinates = [(source['xcentroid'], source['ycentroid']) for source in sources]
+            filtered_sources = remove_duplicates(sources_coordinates, stacked_image_coordinates)
         
-            if sources is not None and len(sources) > 0:
+            if filtered_sources is not None and len(sources) > 0:
                 print(f"Flagged {filename} for classification.")            
-                save_flagged_image(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename.split(".")[0] + ".png", sources)
-                save_flagged_image(INPUT_PATH + filename, FLAGGED_ORIGINAL_PATH + filename.split(".")[0] + ".png", sources)     
+                save_flagged_image(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename.split(".")[0] + ".png", sources_coordinates)
+                save_flagged_image(INPUT_PATH + filename, FLAGGED_ORIGINAL_PATH + filename.split(".")[0] + ".png", sources_coordinates)     
