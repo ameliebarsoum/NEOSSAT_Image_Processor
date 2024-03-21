@@ -187,7 +187,7 @@ def image_stacker(input_path, output_path):
     ccds = [CCDData.read(path, unit="adu") for path in paths]
     
     combined_image = combine(ccds,
-                             output_file=output_path, # Comment out if you don't want to save the unblurred stacked image
+                             output_file=output_path, 
                              method='average',
                              sigma_clip=True,
                              sigma_clip_low_thresh=3,
@@ -196,15 +196,7 @@ def image_stacker(input_path, output_path):
                              sigma_clip_dev_func=mad_std,
                              mem_limit=350e6,
                              overwrite_output=True)
-##### Comment/Uncomment to apply Gaussian blur to the combined image #####
-    # combined_image_np = combined_image.data.astype(np.float32)
-    # blurred_image = cv2.GaussianBlur(combined_image_np, (5, 5), 2)
-    # hdu = fits.PrimaryHDU(blurred_image, header=ccds[0].header)
-    # hdul_out = fits.HDUList([hdu])
-    # hdul_out.writeto(STACKED_PATH, overwrite=True)
-    
-    # return blurred_image
-# #####
+
     return combined_image
 
 """
@@ -265,20 +257,6 @@ def pixel_difference_with_stack(image1_path, stacked_image_path):
     except FileNotFoundError:
         print(f"Could not find {image1_path} or stacked image. Previous steps may not have been completed.")
         return
-
-"""
-Applies Gaussian blur
-"""
-def blur(path):
-    # Open the FITS file
-    with fits.open(path) as hdul:
-        image = hdul[0].data  # Accessing the data from the primary HDU
-        blurred_image = cv2.GaussianBlur(image.astype(np.float32), (5, 5), 2)
-
-        # Save the background-subtracted and darkened image to a new FITS file
-        hdu = fits.PrimaryHDU(blurred_image, header=hdul[0].header)
-        hdul_out = fits.HDUList([hdu])
-        hdul_out.writeto(path, overwrite=True)
 
 """
 Use astride to detect cosmic ray hits in the image
@@ -390,7 +368,6 @@ def RUN_PIPELINE(fits_files, date_obs):
 
         # Perform pixel differencing with all aligned images
         for filename in fits_files:
-            # Apply Gaussian blur here if needed
             error = pixel_difference_with_stack(os.path.join(ALIGNED_PATH, filename), stacked_image_path)
             if error == -1:
                 continue
