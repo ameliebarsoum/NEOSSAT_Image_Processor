@@ -1,15 +1,16 @@
 import os
+from astropy.coordinates import SkyCoord
+from astropy import units as u
 from astropy.io import fits
 import numpy as np
 import matplotlib.pyplot as plt
 from photutils.detection import DAOStarFinder
 from astropy.stats import sigma_clipped_stats
-import cv2
 from scipy.ndimage import shift, median_filter
 from skimage.transform import resize
-import random
 from astropy.stats import mad_std
 from ccdproc import CCDData, trim_image, combine
+from matplotlib.path import Path
 from astride import Streak
 import warnings 
 warnings.filterwarnings("ignore")
@@ -38,7 +39,7 @@ def detect_objects(filepath, threshold=15, fwhm=10.0, sharplo=0.2, roundlo=-1.0,
     
     # Apply median filter to fits
     if filter:
-        data = median_filter(data, 7)
+       data = median_filter(data, 7)
 
     # Calculate background statistics
     mean, median, std = sigma_clipped_stats(data, sigma=3.0)
@@ -60,16 +61,17 @@ def detect_objects(filepath, threshold=15, fwhm=10.0, sharplo=0.2, roundlo=-1.0,
     return sources
 
 """
-Parameters: Two lists of tuples representing x, y coordinates of sources
-Returns: List 1 without any sources that are within a given number of pixels of any source in List 2
+Parameters: 
+- x, y coordinates of a point
+- A list of sources from DAOStarFinder representing x, y coordinates of sources
+- threshold: The maximum distance between the point and any source in the list for the function to return True
+Returns: True of x, y coordinates are within threshold distance of any source in the list, False otherwise
 """
-def remove_duplicates(source1, source2, threshold=0.2):
-    for i in range(len(source1)):
-        for j in range(len(source2)):
-            if np.sqrt((source1[i][0] - source2[j][0]) ** 2 + (source1[i][1] - source2[j][1]) ** 2) < threshold:
-                source1.pop(i)
-                break
-    return source1
+def is_duplicate(x_coord, y_coord, source_list, threshold=0.05):
+    for source in source_list:
+        if np.sqrt((x_coord - source['xcentroid']) ** 2 + (y_coord - source['ycentroid']) ** 2) < threshold:
+            return True
+    return False
 
 """
 List all distances between each base source and each img source
@@ -262,7 +264,7 @@ def pixel_difference_with_stack(image1_path, stacked_image_path):
 Use astride to detect cosmic ray hits in the image
 """
 def streak_detection(path):
-
+    
     max_length = 500
     min_length = 5
 
@@ -293,8 +295,7 @@ def streak_detection(path):
     streak.write_outputs()
     streak.plot_figures()
 
-    # Return list of tuples of x_center, y_center of cosmic ray hits
-    return [(streak_instance.get('x_center'), streak_instance.get('y_center')) for streak_instance in streak.streaks]
+    return streak.streaks
 
 """
 Parameters: input path to fits image, output path, sources
@@ -316,19 +317,40 @@ def save_flagged_image(input_path, output_path, sources):
     plt.savefig(output_path, bbox_inches='tight', pad_inches=0)
     plt.close()
 
+
 """
-Helper for choosing random base image for pixel diffencing 
+Description: Check if a point is inside any of the detected streaks.
+
+Parameters:
+- x_centroid, y_centroid: Coordinates of the source detected by DAOStarFinder.
+- raw_borders: List of borders for each detected streak from ASTRiDE, 
+    where each border is a list of (x, y) tuples that defines the polygon.
+    
+Returns: True if the source is within any streak, False otherwise.
 """
-def get_random_files(directory, num_files):
-    files = [filename for filename in os.listdir(directory) if filename.lower().endswith('.fits')]
-    return random.sample(files, min(num_files, len(files)))
+def is_source_in_streak(x_centroid, y_centroid, raw_borders):
 
-def RUN_PIPELINE(fits_files, date_obs):
+    for border in raw_borders:
+        # Create a polygon path from streak borders
+        x_coords = border['x']
+        y_coords = border['y']
+        border_points = list(zip(x_coords, y_coords)) # List of (x, y) tuples
+        path = Path(border_points)
+        # Check if the source's centroid is inside the path
+        if path.contains_point((x_centroid, y_centroid)):
+            return True  # Source is inside a streak
+    return False  # Source is not inside any streak
 
-    # Cosmic ray hit detection (works best on raw images)
-    for filename in fits_files:
-        streak_coords = streak_detection(INPUT_PATH + filename)       
+"""
+Parameters: list of filenames of fits files, the date of observation of the images.
+Description: Runs the entire detection pipeline on the input images.
+Outputs: Dictionary of filenames and their corresponding detected sources, including of the stacked image.
+"""
+def DETECTION_PIPELINE(fits_files, date_obs):  
 
+    # Init dictionary to store sources
+    SOURCES = {}
+        
     # Alignment
     source_tuples = []
     base_source = None
@@ -364,25 +386,63 @@ def RUN_PIPELINE(fits_files, date_obs):
         stacked_image_path = STACKED_PATH + date_obs + ".fits"
         image_stacker(input_path=ALIGNED_PATH, output_path=stacked_image_path)
         stacked_image_sources = detect_objects(stacked_image_path)
-        stacked_image_coordinates = [(source['xcentroid'], source['ycentroid']) for source in stacked_image_sources] # this is probs wrong
+        # Add stacked image sources to SOURCES
+        SOURCES[stacked_image_path] = stacked_image_sources
 
         # Perform pixel differencing with all aligned images
         for filename in fits_files:
             error = pixel_difference_with_stack(os.path.join(ALIGNED_PATH, filename), stacked_image_path)
             if error == -1:
                 continue
-            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=50, fwhm=25, sharplo=0.5)
+            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=30, fwhm=15, sharplo=0.5)
             if sources is None or len(sources) < 1:
+                SOURCES[filename] = None
                 continue
             print(f"Detected {len(sources)} objects in {filename}.")
+            # Add sources to SOURCES
+            SOURCES[filename] = sources
 
-            sources_coordinates = [(source['xcentroid'], source['ycentroid']) for source in sources]
-            filtered_sources = remove_duplicates(sources_coordinates, stacked_image_coordinates)
-        
-            if filtered_sources is not None and len(sources) > 0:
-                print(f"Flagged {filename} for classification.")            
+            if sources is not None and len(sources) > 0:
+                print(f"Flagged {filename} for classification.")    
+                sources_coordinates = [(source['xcentroid'], source['ycentroid']) for source in sources]
                 save_flagged_image(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename.split(".")[0] + ".png", sources_coordinates)
                 save_flagged_image(INPUT_PATH + filename, FLAGGED_ORIGINAL_PATH + filename.split(".")[0] + ".png", sources_coordinates)     
+
+    return SOURCES
+
+
+def FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS):
+
+    # Get sources from stacked images 
+    stacked_sources = [SOURCES[filename] for filename in SOURCES if "stacked" in filename]
+
+    # Iterate across dictionary
+    for filename in SOURCES:
+        if SOURCES[filename] is None or "stacked" in filename:
+            continue
+        
+        sources = SOURCES[filename]
+        for source in sources:
+            x_coord = source['xcentroid']
+            y_coord = source['ycentroid']
+            rows_to_keep = []
+            # Check if the source is in the stacked image, i.e. false positive because it has not moved.
+            for stacked_source in stacked_sources:
+                if stacked_source is not None and is_duplicate(x_coord, y_coord, stacked_source):
+                    print(f"An object flagged for classification is a false positive in {filename}. Removing from unclassified objects.")
+                else:
+                    rows_to_keep.append(source)
+
+            # Check if source is inside any detected streak
+            if filename in COSMIC_RAY_HITS:
+                if is_source_in_streak(x_coord, y_coord, COSMIC_RAY_HITS[filename]):
+                    print(f"An object flagged for classification is actually a cosmic ray hit in {filename}. Removing from unclassified objects.")
+                else:
+                    rows_to_keep.append(source)
+
+            SOURCES[filename] = rows_to_keep
+
+    return SOURCES
 
 
 if __name__ == "__main__":
@@ -401,21 +461,33 @@ if __name__ == "__main__":
     if not os.path.exists(CRH_PATH):
         os.makedirs(CRH_PATH)
 
+    # Get all fits files in the input path
+    INPUT_FILES = [filename for filename in os.listdir(INPUT_PATH) if filename.lower().endswith('.fits')]
+
     # Separate files in input path by date
     fits_files_by_date = {}
-    for fits_file in os.listdir(INPUT_PATH):
-        if fits_file.endswith(".fits"):
-            # Open fits file
-            with fits.open(INPUT_PATH + fits_file) as hdul:
-                header = hdul[0].header
-                date_obs = header['DATE-OBS']
-                date_obs = date_obs.split("T")[0]
-                if date_obs not in fits_files_by_date:
-                    fits_files_by_date[date_obs] = []
-                fits_files_by_date[date_obs].append(fits_file)
+    for fits_file in INPUT_FILES:
+        # Open fits file
+        with fits.open(INPUT_PATH + fits_file) as hdul:
+            header = hdul[0].header
+            date_obs = header['DATE-OBS']
+            date_obs = date_obs.split("T")[0]
+            if date_obs not in fits_files_by_date:
+                fits_files_by_date[date_obs] = []
+            fits_files_by_date[date_obs].append(fits_file)
         
-    # Run pipeline on each date
+    # Run streak detection on each file
+    COSMIC_RAY_HITS = {}
+    for filename in INPUT_FILES:
+        streaks = streak_detection(INPUT_PATH + filename) # Works best on raw images
+        if streaks is not None:
+            COSMIC_RAY_HITS[filename] = streaks    
+
+    # Run object detection pipeline on each date
     for date_obs in fits_files_by_date:
         print(f"Running pipeline on {date_obs}")
-        RUN_PIPELINE(fits_files_by_date[date_obs], date_obs)
+        SOURCES = DETECTION_PIPELINE(fits_files_by_date[date_obs], date_obs)
         print(f"Finished pipeline on {date_obs}\n")
+
+    # Filter sources
+    FILTERED_SOURCES = FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS)
