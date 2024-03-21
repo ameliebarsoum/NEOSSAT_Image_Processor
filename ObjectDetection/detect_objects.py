@@ -339,7 +339,41 @@ def is_source_in_streak(x_centroid, y_centroid, raw_borders):
         # Check if the source's centroid is inside the path
         if path.contains_point((x_centroid, y_centroid)):
             return True  # Source is inside a streak
-    return False  # Source is not inside any streak
+    return False 
+
+"""
+Identifies moving or orbiting objects across a series of FITS images.
+
+Parameters:
+- sources dictionary: Dictionary with FITS file names as keys and QTables of detected sources as values.
+- max_sep: Maximum separation to consider sources as the same object across images, in arcseconds.
+
+Returns:
+- A dictionary of moving objects and their positions in each image.
+"""
+def find_moving_objects(sources_dict, max_sep=1*u.arcsec):
+
+    moving_objects = {}
+    images = list(sources_dict.keys())
+
+    for i, img in enumerate(images[:-1]):
+        current_sources = SkyCoord(ra=sources_dict[img]['ra'], dec=sources_dict[img]['dec'], unit=(u.deg, u.deg))
+        next_sources = SkyCoord(ra=sources_dict[images[i+1]]['ra'], dec=sources_dict[images[i+1]]['dec'], unit=(u.deg, u.deg))
+
+        idx, d2d, _ = current_sources.match_to_catalog_sky(next_sources)
+        matches = d2d < max_sep
+
+        for j, matched in enumerate(matches):
+            if matched:
+                if img not in moving_objects:
+                    moving_objects[img] = []
+                moving_objects[img].append((current_sources[j].ra.deg, current_sources[j].dec.deg))
+
+                if images[i+1] not in moving_objects:
+                    moving_objects[images[i+1]] = []
+                moving_objects[images[i+1]].append((next_sources[idx[j]].ra.deg, next_sources[idx[j]].dec.deg))
+    print(moving_objects)
+    return moving_objects
 
 """
 Parameters: list of filenames of fits files, the date of observation of the images.
@@ -394,7 +428,7 @@ def DETECTION_PIPELINE(fits_files, date_obs):
             error = pixel_difference_with_stack(os.path.join(ALIGNED_PATH, filename), stacked_image_path)
             if error == -1:
                 continue
-            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=30, fwhm=15, sharplo=0.5)
+            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=40, fwhm=24, sharplo=0.5)
             if sources is None or len(sources) < 1:
                 SOURCES[filename] = None
                 continue
@@ -447,7 +481,6 @@ def FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS):
 
 if __name__ == "__main__":
 
-    INPUT_PATH = "attmept/"
     if not os.path.exists(ALIGNED_PATH):
         os.makedirs(ALIGNED_PATH)
     if not os.path.exists(DIFFERENCED_PATH):
