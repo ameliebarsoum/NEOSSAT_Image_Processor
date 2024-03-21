@@ -21,7 +21,7 @@ INPUT_PATH = '../n1fits/mission/image/outgoing/ASTRO/'
 ALIGNED_PATH = 'aligned/'
 DIFFERENCED_PATH = 'differenced/'
 FLAGGED_PATH = 'flagged/'
-STACKED_PATH = 'stacked/stacked_img.fits'
+STACKED_PATH = 'stacked/'
 FLAGGED_ORIGINAL_PATH = 'flagged_original/'
 CRH_PATH = 'cosmic_ray_hits/'
 """
@@ -75,14 +75,13 @@ def remove_duplicates(source1, source2, threshold=0.2):
 List all distances between each base source and each img source
 Returns list of tuples of the distance, id of base source, id of img source
 """
-def find_all_distances_between(base_sources, img_sources, max_distance=15):
+def find_all_distances_between(base_sources, img_sources, max_distance=200):
     distances = []
     for x_base, y_base, id_base in [(base_source['xcentroid'], base_source['ycentroid'], base_source['id']) for base_source in base_sources]:
         for x_img, y_img, id_img in [(img_source['xcentroid'], img_source['ycentroid'], img_source['id']) for img_source in img_sources]:
             distance = np.sqrt((x_base - x_img) ** 2 + (y_base - y_img) ** 2)
             if distance <= max_distance: 
                 distances.append((distance, id_base, id_img))
-    distances.sort(key=lambda x: x[0])
     return distances
 
 """
@@ -93,12 +92,13 @@ This is done to ensure that the shift found can be validated against another pai
 def find_closest_pair(tuples):
     closest_pair = None
     min_distance_pair = 0.1
+    max_distance = 15
     
     for i in range(len(tuples)):
         distance1, id1, id2 = tuples[i]
         for j in range(i + 1, len(tuples)):
             distance2, id3, id4 = tuples[j]
-            if id3 not in (id1, id2) and id4 not in (id1, id2):
+            if id3 not in (id1, id2) and id4 not in (id1, id2) and distance2 < max_distance and distance1 < max_distance:
                 distance_pair = abs(distance2 - distance1)
                 # Shift should "match" at least one other pair to a closeness of min_distance_pair
                 if distance_pair < min_distance_pair:
@@ -114,48 +114,44 @@ def find_closest_pair(tuples):
 description: Aligns one image to another based on the brightest star, such that their stars overlap.
 """
 def align(base_sources, img_sources, img_filename):
-    
-    distances = find_all_distances_between(base_sources, img_sources)
-    
-    if len(base_sources) == 1 or len(img_sources) == 1: # just take the smallest distance
-        print("Only one star detected in one of the images. Using the closest star for alignment.")
-        base_idx, img_idx, _, _ = distances[0]
-    else:
-        tuple = find_closest_pair(distances)
-        if tuple is None:
-            print("No matching stars found for alignment of " + img_filename + ". Not moving on with this file.")
+
+    if len(base_sources) == 1 or len(img_sources) == 1: # Taking smallest distance often results in bad alignment
+            print("Only one star found for alignment of " + img_filename + ". Skipping this image.")
             return -1
-
-        base_idx, img_idx, second_base_idx, second_img_idx = tuple
     
-    base_row = base_sources[base_sources['id'] == base_idx]
-    img_row = img_sources[img_sources['id'] == img_idx]
-
-    base_row2 = base_sources[base_sources['id'] == second_base_idx]
-    img_row2 = img_sources[img_sources['id'] == second_img_idx]
-    ref_star_coords_image1_d = base_row2['xcentroid'][0], base_row2['ycentroid'][0]
-    ref_star_coords_image2_d = img_row2['xcentroid'][0], img_row2['ycentroid'][0]
-
-    ref_star_coords_image1 = base_row['xcentroid'][0], base_row['ycentroid'][0]
-    ref_star_coords_image2 = img_row['xcentroid'][0], img_row['ycentroid'][0]
-
-    # Calculate the shift needed to align the images
-    shift_x = ref_star_coords_image1[0] - ref_star_coords_image2[0]
-    shift_y = ref_star_coords_image1[1] - ref_star_coords_image2[1]
-
-    # Save png with stars used for alignment circled
-    save_flagged_image(INPUT_PATH + img_filename, ALIGNED_PATH + img_filename.split(".")[0] + ".png", [ref_star_coords_image1_d+ref_star_coords_image2_d +ref_star_coords_image1+ ref_star_coords_image2])
-
-    # Shift one image relative to the other using interpolation
     with fits.open(INPUT_PATH + img_filename) as hdul: 
+        header = hdul[0].header
+        
+        distances = find_all_distances_between(base_sources, img_sources)
+        tuple = find_closest_pair(distances)
+
+        if tuple is None:
+            print(len(distances))
+            print("No pair of stars found for alignment of " + img_filename + ". Skipping this image.")
+            return -1
+        else:
+            base_id, img_id, second_base_id, second_img_id = tuple
+    
+        base_row = base_sources[base_sources['id'] == base_id]
+        img_row = img_sources[img_sources['id'] == img_id]
+
+        ref_star_coords_image1 = base_row['xcentroid'][0], base_row['ycentroid'][0]
+        ref_star_coords_image2 = img_row['xcentroid'][0], img_row['ycentroid'][0]
+
+        # Calculate the shift needed to align the images
+        shift_x = ref_star_coords_image1[0] - ref_star_coords_image2[0]
+        shift_y = ref_star_coords_image1[1] - ref_star_coords_image2[1]
+
+        # Shift one image relative to the other using interpolation
         shifted_data = shift(hdul[0].data, (shift_y, shift_x), mode='nearest')
         hdul[0].data = shifted_data
+        
         
         hdu = fits.PrimaryHDU(shifted_data, header=hdul[0].header)
         hdul_out = fits.HDUList([hdu])
         hdul_out.writeto(ALIGNED_PATH + img_filename, overwrite=True)
 
-    print(f"Aligning images with a shift of ({shift_x}, {shift_y}) pixels as {ALIGNED_PATH + img_filename}.")
+    print(f"Aligning {ALIGNED_PATH + img_filename} with a shift of ({shift_x}, {shift_y}) pixels.")
     return (shift_x, shift_y) 
 
 """
@@ -186,12 +182,12 @@ def crop_all(ALIGNED_PATH):
 """
 Perform image stacking on a set of FITS files to reduce noise for pixel differencing
 """
-def image_stacker(ALIGNED_PATH):
-    paths = [ALIGNED_PATH + filename for filename in os.listdir(ALIGNED_PATH) if filename.lower().endswith('.fits')]
+def image_stacker(input_path, output_path):
+    paths = [input_path + filename for filename in os.listdir(input_path) if filename.lower().endswith('.fits')]
     ccds = [CCDData.read(path, unit="adu") for path in paths]
     
     combined_image = combine(ccds,
-                             output_file=STACKED_PATH, # Comment out if you don't want to save the unblurred stacked image
+                             output_file=output_path, # Comment out if you don't want to save the unblurred stacked image
                              method='average',
                              sigma_clip=True,
                              sigma_clip_low_thresh=3,
@@ -238,15 +234,15 @@ def pixel_difference(image1_file, image2_file, idx):
 
     except FileNotFoundError:
         print(f"Could not find {image1_file} or {image2_file}. Previous steps may not have been completed.")
-        return
+        return -1
     
 """
 Performs pixel differencing with the stacked image found at STACKED_PATH
 """
-def pixel_difference_with_stack(image1_filename):
-    image1_file = os.path.join(ALIGNED_PATH, image1_filename)
+def pixel_difference_with_stack(image1_path, stacked_image_path):
+
     try:
-        with fits.open(image1_file) as hdul1, fits.open(STACKED_PATH) as hdul2:
+        with fits.open(image1_path) as hdul1, fits.open(stacked_image_path) as hdul2:
             data1 = hdul1[0].data
             data2 = hdul2[0].data
 
@@ -261,13 +257,13 @@ def pixel_difference_with_stack(image1_filename):
             diff_data = data1 - data2 
 
             # Save the difference image to a new FITS file
-            output_filename = DIFFERENCED_PATH + image1_filename
+            output_filename = DIFFERENCED_PATH + image1_path.split("/")[-1].split(".")[0] + ".fits"
             hdu = fits.PrimaryHDU(diff_data, header=hdul1[0].header)
             hdul_out = fits.HDUList([hdu])
             hdul_out.writeto(output_filename, overwrite=True)
 
     except FileNotFoundError:
-        print(f"Could not find {image1_file} or stacked image. Previous steps may not have been completed.")
+        print(f"Could not find {image1_path} or stacked image. Previous steps may not have been completed.")
         return
 
 """
@@ -349,27 +345,7 @@ def get_random_files(directory, num_files):
     files = [filename for filename in os.listdir(directory) if filename.lower().endswith('.fits')]
     return random.sample(files, min(num_files, len(files)))
 
-
-if __name__ == "__main__":
-
-    fits_files = [filename for filename in os.listdir(INPUT_PATH) if filename.lower().endswith('.fits')]
-    # Delete prev test files with os.remove here if needed
-    if len(fits_files) < 2:
-        print("Not enough images to perform pixel differencing.")
-        exit()
-  
-    if not os.path.exists(ALIGNED_PATH):
-        os.makedirs(ALIGNED_PATH)
-    if not os.path.exists(DIFFERENCED_PATH):
-        os.makedirs(DIFFERENCED_PATH) 
-    if not os.path.exists(FLAGGED_PATH):
-        os.makedirs(FLAGGED_PATH) 
-    if not os.path.exists("stacked"):
-        os.makedirs("stacked")
-    if not os.path.exists(FLAGGED_ORIGINAL_PATH):
-        os.makedirs(FLAGGED_ORIGINAL_PATH)
-    if not os.path.exists(CRH_PATH):
-        os.makedirs(CRH_PATH)
+def RUN_PIPELINE(fits_files, date_obs):
 
     # Cosmic ray hit detection (works best on raw images)
     for filename in fits_files:
@@ -378,13 +354,13 @@ if __name__ == "__main__":
     # Alignment
     source_tuples = []
     base_source = None
-    max_stars = -1
     for filename in fits_files:
-        num_stars = 0
-        cur_source = detect_objects(INPUT_PATH + filename, threshold=25, border=True) # Too many points = inaccurate alignment
-        num_stars = len(cur_source)
+        cur_source = detect_objects(INPUT_PATH + filename, threshold=15, border=True) # Too many points = inaccurate alignment
+        # save detected objects image
+        if not os.path.exists("detected/"):
+            os.makedirs("detected/")
+        save_flagged_image(INPUT_PATH + filename, "detected/" + filename.split(".")[0] + "_d.png", [(source['xcentroid'], source['ycentroid']) for source in cur_source])
         source_tuples.append((cur_source, filename))
-        print(f"Detected {num_stars} objects in {filename}.")
     
     # Select the source with the median detected objects as the base for alignment
     source_tuples.sort(key=lambda x: len(x[0]))
@@ -407,20 +383,21 @@ if __name__ == "__main__":
                     pixel_difference(base_path, comparison_path, str(i) + str(j))
     else: 
         # Create a stacked image
-        stacked_image = image_stacker(ALIGNED_PATH=ALIGNED_PATH)
-        stacked_image_sources = detect_objects(STACKED_PATH)
+        stacked_image_path = STACKED_PATH + date_obs + ".fits"
+        image_stacker(input_path=ALIGNED_PATH, output_path=stacked_image_path)
+        stacked_image_sources = detect_objects(stacked_image_path)
         stacked_image_coordinates = [(source['xcentroid'], source['ycentroid']) for source in stacked_image_sources] # this is probs wrong
 
         # Perform pixel differencing with all aligned images
         for filename in fits_files:
             # Apply Gaussian blur here if needed
-            pixel_difference_with_stack(filename)
+            error = pixel_difference_with_stack(os.path.join(ALIGNED_PATH, filename), stacked_image_path)
+            if error == -1:
+                continue
             sources = detect_objects(DIFFERENCED_PATH + filename, threshold=50, fwhm=25, sharplo=0.5)
             if sources is None or len(sources) < 1:
-                print(f"No objects detected in {filename}.")
                 continue
             print(f"Detected {len(sources)} objects in {filename}.")
-            print(f"Coordinates: {[(source['xcentroid'], source['ycentroid']) for source in sources]}")
 
             sources_coordinates = [(source['xcentroid'], source['ycentroid']) for source in sources]
             filtered_sources = remove_duplicates(sources_coordinates, stacked_image_coordinates)
@@ -429,3 +406,39 @@ if __name__ == "__main__":
                 print(f"Flagged {filename} for classification.")            
                 save_flagged_image(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename.split(".")[0] + ".png", sources_coordinates)
                 save_flagged_image(INPUT_PATH + filename, FLAGGED_ORIGINAL_PATH + filename.split(".")[0] + ".png", sources_coordinates)     
+
+
+if __name__ == "__main__":
+
+    INPUT_PATH = "attmept/"
+    if not os.path.exists(ALIGNED_PATH):
+        os.makedirs(ALIGNED_PATH)
+    if not os.path.exists(DIFFERENCED_PATH):
+        os.makedirs(DIFFERENCED_PATH) 
+    if not os.path.exists(FLAGGED_PATH):
+        os.makedirs(FLAGGED_PATH) 
+    if not os.path.exists("stacked"):
+        os.makedirs("stacked")
+    if not os.path.exists(FLAGGED_ORIGINAL_PATH):
+        os.makedirs(FLAGGED_ORIGINAL_PATH)
+    if not os.path.exists(CRH_PATH):
+        os.makedirs(CRH_PATH)
+
+    # Separate files in input path by date
+    fits_files_by_date = {}
+    for fits_file in os.listdir(INPUT_PATH):
+        if fits_file.endswith(".fits"):
+            # Open fits file
+            with fits.open(INPUT_PATH + fits_file) as hdul:
+                header = hdul[0].header
+                date_obs = header['DATE-OBS']
+                date_obs = date_obs.split("T")[0]
+                if date_obs not in fits_files_by_date:
+                    fits_files_by_date[date_obs] = []
+                fits_files_by_date[date_obs].append(fits_file)
+        
+    # Run pipeline on each date
+    for date_obs in fits_files_by_date:
+        print(f"Running pipeline on {date_obs}")
+        RUN_PIPELINE(fits_files_by_date[date_obs], date_obs)
+        print(f"Finished pipeline on {date_obs}\n")
