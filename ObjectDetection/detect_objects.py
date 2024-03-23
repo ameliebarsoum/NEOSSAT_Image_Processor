@@ -25,6 +25,7 @@ FLAGGED_PATH = 'flagged/'
 STACKED_PATH = 'stacked/'
 FLAGGED_ORIGINAL_PATH = 'flagged_original/'
 CRH_PATH = 'cosmic_ray_hits/'
+FILTERED_FLAGGED_ORIGINAL_PATH = 'filtered_flagged_original/'
 """
 Input: Path to fits file, and optionally: threshold, fwhm, sharplo, and roundlo for detection via DAOStarFinder
 Description: Detects objects in the image using the DAOStarFinder algorithm
@@ -341,39 +342,42 @@ def is_source_in_streak(x_centroid, y_centroid, raw_borders):
             return True  # Source is inside a streak
     return False 
 
-"""
-Identifies moving or orbiting objects across a series of FITS images.
+from collections import defaultdict
 
-Parameters:
-- sources dictionary: Dictionary with FITS file names as keys and QTables of detected sources as values.
-- max_sep: Maximum separation to consider sources as the same object across images, in arcseconds.
+def find_moving_objects(source_detections, closeness_threshold=5):
+    """
+    Groups detected sources across images by suspected objects based on spatial consistency.
+    
+    Parameters:
+    - source_detections: Dict, where each key is an image identifier and each value is a list of (x, y) tuples for detected sources.
+    - closeness_threshold: Maximum distance between sources to consider them as part of the same object.
+    """
+    objects = defaultdict(list) # Map object ID to list of (filename, image_id, x, y) tuples
+    object_id = 0
 
-Returns:
-- A dictionary of moving objects and their positions in each image.
-"""
-def find_moving_objects(sources_dict, max_sep=1*u.arcsec):
+    for fname, sources in SOURCES.items():
+        if sources is None or len(sources) < 1:
+            continue
+        for source in sources:
+            id, x, y = source['id'], source['xcentroid'], source['ycentroid']
+            found = False
+            for obj, coords in objects.items():
+                if any(abs(x - cx) <= closeness_threshold and abs(y - cy) <= closeness_threshold for _, _, cx, cy in coords):
+                    objects[obj].append((fname, id, x, y))
+                    found = True
+                    break
+            if not found:
+                objects[object_id].append((fname, id, x, y))
+                object_id += 1
 
-    moving_objects = {}
-    images = list(sources_dict.keys())
+    # Filter out objects only detected in one image
+    moving_objects = {obj: coords for obj, coords in objects.items() if len(set(fname for fname, _, _, _ in coords)) > 1}
 
-    for i, img in enumerate(images[:-1]):
-        current_sources = SkyCoord(ra=sources_dict[img]['ra'], dec=sources_dict[img]['dec'], unit=(u.deg, u.deg))
-        next_sources = SkyCoord(ra=sources_dict[images[i+1]]['ra'], dec=sources_dict[images[i+1]]['dec'], unit=(u.deg, u.deg))
+    # Filter SOURCES to only include moving objects
+    for fname in SOURCES:
+        SOURCES[fname] = [source for source in SOURCES[fname] if any(source['id'] == id for _, id, _, _ in moving_objects.values())]
 
-        idx, d2d, _ = current_sources.match_to_catalog_sky(next_sources)
-        matches = d2d < max_sep
-
-        for j, matched in enumerate(matches):
-            if matched:
-                if img not in moving_objects:
-                    moving_objects[img] = []
-                moving_objects[img].append((current_sources[j].ra.deg, current_sources[j].dec.deg))
-
-                if images[i+1] not in moving_objects:
-                    moving_objects[images[i+1]] = []
-                moving_objects[images[i+1]].append((next_sources[idx[j]].ra.deg, next_sources[idx[j]].dec.deg))
-    print(moving_objects)
-    return moving_objects
+    return SOURCES
 
 """
 Parameters: list of filenames of fits files, the date of observation of the images.
@@ -428,7 +432,7 @@ def DETECTION_PIPELINE(fits_files, date_obs):
             error = pixel_difference_with_stack(os.path.join(ALIGNED_PATH, filename), stacked_image_path)
             if error == -1:
                 continue
-            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=40, fwhm=24, sharplo=0.5)
+            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=30, fwhm=24, sharplo=0.5)
             if sources is None or len(sources) < 1:
                 SOURCES[filename] = None
                 continue
@@ -476,11 +480,23 @@ def FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS):
 
             SOURCES[filename] = rows_to_keep
 
+    SOURCES = find_moving_objects(SOURCES)
+
+    # Save flagged images
+    for filename in SOURCES:
+        if "stacked" in filename:
+            continue
+        sources = SOURCES[filename]
+        if sources is not None:
+            sources_coordinates = [(source['xcentroid'], source['ycentroid']) for source in sources]
+            save_flagged_image(INPUT_PATH + filename, FILTERED_FLAGGED_ORIGINAL_PATH + filename.split(".")[0] + ".png", sources_coordinates)
+
     return SOURCES
 
 
 if __name__ == "__main__":
 
+    INPUT_PATH = "attmept/"
     if not os.path.exists(ALIGNED_PATH):
         os.makedirs(ALIGNED_PATH)
     if not os.path.exists(DIFFERENCED_PATH):
@@ -493,6 +509,8 @@ if __name__ == "__main__":
         os.makedirs(FLAGGED_ORIGINAL_PATH)
     if not os.path.exists(CRH_PATH):
         os.makedirs(CRH_PATH)
+    if not os.path.exists(FILTERED_FLAGGED_ORIGINAL_PATH):
+        os.makedirs(FILTERED_FLAGGED_ORIGINAL_PATH)
 
     # Get all fits files in the input path
     INPUT_FILES = [filename for filename in os.listdir(INPUT_PATH) if filename.lower().endswith('.fits')]
@@ -523,4 +541,4 @@ if __name__ == "__main__":
         print(f"Finished pipeline on {date_obs}\n")
 
     # Filter sources
-    FILTERED_SOURCES = FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS)
+    # FILTERED_SOURCES = FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS)
