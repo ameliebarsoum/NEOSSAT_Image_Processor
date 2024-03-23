@@ -5,6 +5,7 @@ from astropy.io import fits
 import numpy as np
 import matplotlib.pyplot as plt
 from photutils.detection import DAOStarFinder
+from collections import defaultdict
 from astropy.stats import sigma_clipped_stats
 from scipy.ndimage import shift, median_filter
 from skimage.transform import resize
@@ -24,8 +25,10 @@ DIFFERENCED_PATH = 'differenced/'
 FLAGGED_PATH = 'flagged/'
 STACKED_PATH = 'stacked/'
 FLAGGED_ORIGINAL_PATH = 'flagged_original/'
+FLAGGED_ORIGINAL_FITS_PATH = 'flagged_original_fits/'
 CRH_PATH = 'cosmic_ray_hits/'
 FILTERED_FLAGGED_ORIGINAL_PATH = 'filtered_flagged_original/'
+
 """
 Input: Path to fits file, and optionally: threshold, fwhm, sharplo, and roundlo for detection via DAOStarFinder
 Description: Detects objects in the image using the DAOStarFinder algorithm
@@ -318,7 +321,6 @@ def save_flagged_image(input_path, output_path, sources):
     plt.savefig(output_path, bbox_inches='tight', pad_inches=0)
     plt.close()
 
-
 """
 Description: Check if a point is inside any of the detected streaks.
 
@@ -342,9 +344,7 @@ def is_source_in_streak(x_centroid, y_centroid, raw_borders):
             return True  # Source is inside a streak
     return False 
 
-from collections import defaultdict
-
-def find_moving_objects(source_detections, closeness_threshold=5):
+def find_moving_objects(SOURCES, closeness_threshold=5):
     """
     Groups detected sources across images by suspected objects based on spatial consistency.
     
@@ -375,7 +375,9 @@ def find_moving_objects(source_detections, closeness_threshold=5):
 
     # Filter SOURCES to only include moving objects
     for fname in SOURCES:
-        SOURCES[fname] = [source for source in SOURCES[fname] if any(source['id'] == id for _, id, _, _ in moving_objects.values())]
+        if SOURCES[fname] is None or len(SOURCES[fname]) < 1:
+            continue
+        SOURCES[fname] = [source for source in SOURCES[fname] if any(source['id'] == id for obj, coords in moving_objects.items() for _, id, _, _ in coords)]
 
     return SOURCES
 
@@ -432,7 +434,7 @@ def DETECTION_PIPELINE(fits_files, date_obs):
             error = pixel_difference_with_stack(os.path.join(ALIGNED_PATH, filename), stacked_image_path)
             if error == -1:
                 continue
-            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=30, fwhm=24, sharplo=0.5)
+            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=40, fwhm=24, sharplo=0.5)
             if sources is None or len(sources) < 1:
                 SOURCES[filename] = None
                 continue
@@ -493,6 +495,50 @@ def FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS):
 
     return SOURCES
 
+"""
+
+"""
+def UPDATE_HEADER(SOURCES):
+
+    for filename in SOURCES:
+        if "stacked" in filename:
+            continue
+
+        sources = SOURCES[filename]
+        if sources is None or len(sources) == 0:
+            continue
+
+        with fits.open(INPUT_PATH + filename, mode='update') as hdul:
+            header = hdul[0].header
+            print(header['DATE-OBS'])
+        
+            # Add detected source information to the header for each source
+            for i, source in enumerate(sources):
+
+                idx = source['id']
+                header[f'ID_{idx}'] = (source['id'], f'Identifier of detected source {i}')
+                header[f'XCENT_{idx}'] = (source['xcentroid'], f'X centroid of detected source {i}')
+                header[f'YCENT_{idx}'] = (source['ycentroid'], f'Y centroid of detected source {i}')
+                header[f'MAG_{idx}'] = (source['mag'], f'Magnitude of detected source {i}')
+
+                # header[f'SHARP_{i}'] = (source['sharpness'], f'Sharpness of detected source {i}')
+                # header[f'RND1_{i}'] = (source['roundness1'], f'Roundness1 of detected source {i}')
+                # header[f'RND2_{i}'] = (source['roundness2'], f'Roundness2 of detected source {i}')
+                # header[f'NPIX_{i}'] = (source['npix'], f'Number of pixels of detected source {i}')
+                # header[f'SKY_{i}'] = (source['sky'], f'Sky level near detected source {i}')
+                # header[f'PEAK_{i}'] = (source['peak'], f'Peak value of detected source {i}')
+                # header[f'FLUX_{i}'] = (source['flux'], f'Total flux of detected source {i}')
+        
+            # Save changes to header
+            hdul.flush()  # Writes the updated header to the file
+        
+        # Now make a copy of the updated file to add the flagged folder
+            
+        os.rename(INPUT_PATH + filename, FLAGGED_ORIGINAL_FITS_PATH + filename)
+        print(f"Flagged {filename} for classification.")
+
+    else:
+        print("No sources detected.")
 
 if __name__ == "__main__":
 
@@ -511,6 +557,8 @@ if __name__ == "__main__":
         os.makedirs(CRH_PATH)
     if not os.path.exists(FILTERED_FLAGGED_ORIGINAL_PATH):
         os.makedirs(FILTERED_FLAGGED_ORIGINAL_PATH)
+    if not os.path.exists(FLAGGED_ORIGINAL_FITS_PATH):
+        os.makedirs(FLAGGED_ORIGINAL_FITS_PATH)
 
     # Get all fits files in the input path
     INPUT_FILES = [filename for filename in os.listdir(INPUT_PATH) if filename.lower().endswith('.fits')]
@@ -541,4 +589,8 @@ if __name__ == "__main__":
         print(f"Finished pipeline on {date_obs}\n")
 
     # Filter sources
-    # FILTERED_SOURCES = FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS)
+    FILTERED_SOURCES = FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS)
+    
+    # Update headers
+    UPDATE_HEADER(SOURCES)
+    print("Finished updating headers.")
