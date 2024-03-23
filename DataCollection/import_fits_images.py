@@ -61,7 +61,7 @@ def main(args):
     image_list = cadc.get_image_list(query_result=filtered_results, coordinates=coords, radius=radius)
 
     # Download directory - assuming that this is being executed from the root directory (i.e., by run_all.sh)
-    download_directory = 'DataCollection/FITSImages_' + str(RA) + "_" + str(DEC)
+    download_directory = 'FITSImages_' + str(RA) + "_" + str(DEC)
     if not os.path.exists(download_directory):
         os.makedirs(download_directory)
 
