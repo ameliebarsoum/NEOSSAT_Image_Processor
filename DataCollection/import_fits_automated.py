@@ -135,9 +135,10 @@ def fetch_images():
         for row in RA_DEC_List
     }
 
+    paths = []
     # Iterate through each image URL in image_list
     for idx, url in enumerate(image_list):
-        observation_id = results['observationID'][idx]  # Assuming this is how you get each observation ID
+        observation_id = results['observationID'][idx]
 
         # Find corresponding RA and DEC for the observation ID
         if observation_id in obs_id_to_radec:
@@ -154,6 +155,9 @@ def fetch_images():
         download_directory = f'./FITSImages_{RA_formatted}_{DEC_formatted}'
         if not os.path.exists(download_directory):
             os.makedirs(download_directory)
+
+        if download_directory not in paths:
+            paths.append(download_directory)
 
         target_name = results['target_name'][idx]
         image_type = results['type'][idx]
@@ -186,5 +190,9 @@ def fetch_images():
         else:
             print(f"File already exists: {filename}")
 
+    return paths
+
 if __name__ == "__main__":
-    fetch_images()
+    paths = fetch_images()
+    for path in paths:
+        print(path)
