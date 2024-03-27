@@ -13,21 +13,21 @@ from astropy.stats import mad_std
 from ccdproc import CCDData, trim_image, combine
 from matplotlib.path import Path
 from astride import Streak
+import shutil
 import warnings 
 warnings.filterwarnings("ignore")
 import logging
 logger = logging.getLogger()
-logger.setLevel(logging.CRITICAL)
 
-INPUT_PATH = '../n1fits/mission/image/outgoing/ASTRO/'
-ALIGNED_PATH = 'aligned/'
-DIFFERENCED_PATH = 'differenced/'
-FLAGGED_PATH = 'flagged/'
-STACKED_PATH = 'stacked/'
-FLAGGED_ORIGINAL_PATH = 'flagged_original/'
-FLAGGED_ORIGINAL_FITS_PATH = 'flagged_original_fits/'
-CRH_PATH = 'cosmic_ray_hits/'
-FILTERED_FLAGGED_ORIGINAL_PATH = 'filtered_flagged_original/'
+INPUT_PATH = 'n1fits/mission/image/outgoing/ASTRO/' # Relative path from root directory
+ALIGNED_PATH = 'ObjectDetection/aligned/'
+DIFFERENCED_PATH = 'ObjectDetection/differenced/'
+FLAGGED_PATH = 'ObjectDetection/flagged/'
+STACKED_PATH = 'ObjectDetection/stacked/'
+FLAGGED_ORIGINAL_PATH = 'ObjectDetection/flagged_original/'
+FLAGGED_ORIGINAL_FITS_PATH = 'ObjectDetection/flagged_original_fits/'
+CRH_PATH = 'ObjectDetection/cosmic_ray_hits/'
+FILTERED_FLAGGED_ORIGINAL_PATH = 'ObjectDetection/filtered_flagged_original/'
 
 """
 Input: Path to fits file, and optionally: threshold, fwhm, sharplo, and roundlo for detection via DAOStarFinder
@@ -92,7 +92,8 @@ def find_all_distances_between(base_sources, img_sources, max_distance=200):
 
 """
 Find the closest pair of stars between two images such that
-the distance between these two stars is the same as the distance between at least one unique other pair of stars.
+the distance between these two stars is the same as the 
+distance between at least one unique other pair of stars.
 This is done to ensure that the shift found can be validated against another pair, too.
 """
 def find_closest_pair(tuples):
@@ -125,14 +126,11 @@ def align(base_sources, img_sources, img_filename):
             print("Only one star found for alignment of " + img_filename + ". Skipping this image.")
             return -1
     
-    with fits.open(INPUT_PATH + img_filename) as hdul: 
-        header = hdul[0].header
-        
+    with fits.open(INPUT_PATH + img_filename) as hdul:         
         distances = find_all_distances_between(base_sources, img_sources)
         tuple = find_closest_pair(distances)
 
         if tuple is None:
-            print(len(distances))
             print("No pair of stars found for alignment of " + img_filename + ". Skipping this image.")
             return -1
         else:
@@ -157,7 +155,6 @@ def align(base_sources, img_sources, img_filename):
         hdul_out = fits.HDUList([hdu])
         hdul_out.writeto(ALIGNED_PATH + img_filename, overwrite=True)
 
-    print(f"Aligning {ALIGNED_PATH + img_filename} with a shift of ({shift_x}, {shift_y}) pixels.")
     return (shift_x, shift_y) 
 
 """
@@ -172,7 +169,6 @@ def crop_all(ALIGNED_PATH):
     
     # Find minimum width, height for cropping
     min_size = (min(sizes, key=lambda x: x[0])[0], min(sizes, key=lambda x: x[1])[1])
-    print(f"Cropping images to the minimum size of the set: {min_size}")
     
     # Replace original images with new cropped images
     for filename in os.listdir(ALIGNED_PATH):
@@ -183,7 +179,6 @@ def crop_all(ALIGNED_PATH):
             
             # Write the trimmed image back to disk
             trimmed_ccd.write(ALIGNED_PATH + filename, overwrite=True)
-    print(f"Cropped files to the minimum size of the set: {trimmed_ccd.shape}")
 
 """
 Perform image stacking on a set of FITS files to reduce noise for pixel differencing
@@ -216,7 +211,6 @@ def pixel_difference(image1_file, image2_file, idx):
 
             # Resize images to a common size if they are not the same size
             if (data1.shape[0] != data2.shape[0] or data1.shape[1] != data2.shape[1]):
-                print("Adjusting size for pixel differencing")
                 min_shape = (min(data1.shape[0], data2.shape[0]), min(data1.shape[1], data2.shape[1]))
                 data1 = resize(data1, min_shape, mode='constant')
                 data2 = resize(data2, min_shape, mode='constant')
@@ -246,7 +240,6 @@ def pixel_difference_with_stack(image1_path, stacked_image_path):
 
             # Images are not always the same size. Not sure if this is a result of the cleaning algorithm or not.
             if (data1.shape[0] != data2.shape[0] or data1.shape[1] != data2.shape[1]):
-                print("Adjusting size for pixel differencing")
                 min_shape = (min(data1.shape[0], data2.shape[0]), min(data1.shape[1], data2.shape[1]))
                 data1 = resize(data1, min_shape, mode='edge') 
                 data2 = resize(data2, min_shape, mode='edge')
@@ -273,8 +266,18 @@ def streak_detection(path):
     min_length = 5
 
     try:
+        with fits.open(path) as hdul:
+            data = hdul[0].data  # Accessing the data from the primary HDU
+
+        # Flip image to match orientation of the streaks
+        data = np.flip(data, axis=0)
+
+        hdu = fits.PrimaryHDU(data, header=hdul[0].header)
+        hdul_out = fits.HDUList([hdu])
+        hdul_out.writeto(path, overwrite=True)
+
         output_path = CRH_PATH + path.split("/")[1].split(".")[0]
-        streak = Streak(path, min_points=40, area_cut=40, connectivity_angle=0.01, output_path=output_path)
+        streak = Streak(path, min_points=30, area_cut=40, connectivity_angle=0.01, output_path=output_path)
     except FileNotFoundError:
         return None
     streak.detect()
@@ -405,10 +408,10 @@ def DETECTION_PIPELINE(fits_files, date_obs):
     # Select the source with the median detected objects as the base for alignment
     source_tuples.sort(key=lambda x: len(x[0]))
     base_source = source_tuples[len(source_tuples) // 2][0]
-    print(f"Using {source_tuples[len(source_tuples) // 2][1]} having {len(base_source)} detected sources as the base for alignment .")
+    # print(f"Using {source_tuples[len(source_tuples) // 2][1]} having {len(base_source)} detected sources as the base for alignment .")
 
     for source in source_tuples:
-        align(base_source, source[0], source[1])
+        shift = align(base_source, source[0], source[1])
 
     # Crop to same size
     crop_all(ALIGNED_PATH)
@@ -434,16 +437,16 @@ def DETECTION_PIPELINE(fits_files, date_obs):
             error = pixel_difference_with_stack(os.path.join(ALIGNED_PATH, filename), stacked_image_path)
             if error == -1:
                 continue
-            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=40, fwhm=24, sharplo=0.5)
+            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=40, fwhm=24, sharplo=0.4)
             if sources is None or len(sources) < 1:
                 SOURCES[filename] = None
                 continue
-            print(f"Detected {len(sources)} objects in {filename}.")
+
             # Add sources to SOURCES
             SOURCES[filename] = sources
 
             if sources is not None and len(sources) > 0:
-                print(f"Flagged {filename} for classification.")    
+                #print(f"Flagged {filename} for classification.")    
                 sources_coordinates = [(source['xcentroid'], source['ycentroid']) for source in sources]
                 save_flagged_image(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename.split(".")[0] + ".png", sources_coordinates)
                 save_flagged_image(INPUT_PATH + filename, FLAGGED_ORIGINAL_PATH + filename.split(".")[0] + ".png", sources_coordinates)     
@@ -495,11 +498,13 @@ def FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS):
 
     return SOURCES
 
-"""
 
-"""
 def UPDATE_HEADER(SOURCES):
 
+    if SOURCES is None or len(SOURCES) == 0:
+        print("No sources detected. Exiting.")
+        return -1
+    
     for filename in SOURCES:
         if "stacked" in filename:
             continue
@@ -510,7 +515,6 @@ def UPDATE_HEADER(SOURCES):
 
         with fits.open(INPUT_PATH + filename, mode='update') as hdul:
             header = hdul[0].header
-            print(header['DATE-OBS'])
         
             # Add detected source information to the header for each source
             for i, source in enumerate(sources):
@@ -533,24 +537,33 @@ def UPDATE_HEADER(SOURCES):
             hdul.flush()  # Writes the updated header to the file
         
         # Now make a copy of the updated file to add the flagged folder
-            
-        os.rename(INPUT_PATH + filename, FLAGGED_ORIGINAL_FITS_PATH + filename)
+        shutil.copy(INPUT_PATH + filename, FLAGGED_ORIGINAL_FITS_PATH)
         print(f"Flagged {filename} for classification.")
+        return 0
 
-    else:
-        print("No sources detected.")
 
 if __name__ == "__main__":
+    
+    if not os.path.exists(INPUT_PATH) or len(os.listdir(INPUT_PATH)) == 0:
+        print("Input path does not exist or is empty. Exiting.")
+        exit()
+    
+    # Unzip any files in the input path that end in .gz (cleaner compresses)
+    for filename in os.listdir(INPUT_PATH):
+        if filename.endswith('.gz'):
+            os.system(f"gunzip {INPUT_PATH + filename}")
 
-    INPUT_PATH = "attmept/"
+    # Get all fits files in the input path
+    INPUT_FILES = [filename for filename in os.listdir(INPUT_PATH) if filename.lower().endswith('.fits')]
+
     if not os.path.exists(ALIGNED_PATH):
         os.makedirs(ALIGNED_PATH)
     if not os.path.exists(DIFFERENCED_PATH):
         os.makedirs(DIFFERENCED_PATH) 
     if not os.path.exists(FLAGGED_PATH):
         os.makedirs(FLAGGED_PATH) 
-    if not os.path.exists("stacked"):
-        os.makedirs("stacked")
+    if not os.path.exists(STACKED_PATH):
+        os.makedirs(STACKED_PATH)
     if not os.path.exists(FLAGGED_ORIGINAL_PATH):
         os.makedirs(FLAGGED_ORIGINAL_PATH)
     if not os.path.exists(CRH_PATH):
@@ -559,9 +572,6 @@ if __name__ == "__main__":
         os.makedirs(FILTERED_FLAGGED_ORIGINAL_PATH)
     if not os.path.exists(FLAGGED_ORIGINAL_FITS_PATH):
         os.makedirs(FLAGGED_ORIGINAL_FITS_PATH)
-
-    # Get all fits files in the input path
-    INPUT_FILES = [filename for filename in os.listdir(INPUT_PATH) if filename.lower().endswith('.fits')]
 
     # Separate files in input path by date
     fits_files_by_date = {}
@@ -582,15 +592,17 @@ if __name__ == "__main__":
         if streaks is not None:
             COSMIC_RAY_HITS[filename] = streaks    
 
+    SOURCES = {}
     # Run object detection pipeline on each date
     for date_obs in fits_files_by_date:
-        print(f"Running pipeline on {date_obs}")
-        SOURCES = DETECTION_PIPELINE(fits_files_by_date[date_obs], date_obs)
-        print(f"Finished pipeline on {date_obs}\n")
+        print(f"Running pipeline for {date_obs} on {len(fits_files_by_date[date_obs])} images.")
+        SOURCES.update(DETECTION_PIPELINE(fits_files_by_date[date_obs], date_obs))
+        print(f"Finished pipeline for {date_obs}\n")
 
     # Filter sources
     FILTERED_SOURCES = FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS)
     
     # Update headers
     UPDATE_HEADER(SOURCES)
-    print("Finished updating headers.")
+
+    print(f"Finished object detection pipeline on {INPUT_PATH}.")
