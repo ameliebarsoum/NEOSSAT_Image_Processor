@@ -11,6 +11,8 @@ rm -rf "ObjectDetection/differenced/"
 rm -rf "ObjectDetection/stacked/"
 rm -rf "ObjectDetection/flagged/"
 
+find . -name ".DS_Store" -delete
+
 paths=$(python3 DataCollection/import_fits_automated.py)
 
 # Iterate through each path of FITS image sets
@@ -55,14 +57,22 @@ for path in $paths; do
     # Run ObjectDetection
     python3 ObjectDetection/detect_objects.py
 
+    # Run ObjectClassification from ObjectClassification/classify_object.py
+    cd ObjectClassification
+    python3 classify_object.py
+    cd ..
+
+    python3 upload_folders_to_drive.py "$path"
+
     # Remove intermediary folders
         # From cleaner
     rm -rf "n1fits/mission/image/fits_processor"
+    rm -rf n1fits/mission/image/outgoing/ASTRO/*
         # From ObjectDetection
     rm -rf "ObjectDetection/aligned/"
     rm -rf "ObjectDetection/differenced/"
     rm -rf "ObjectDetection/stacked/"
     rm -rf "ObjectDetection/flagged/"
-
+    
     rm -rf "$path"
 done
