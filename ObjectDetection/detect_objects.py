@@ -19,15 +19,15 @@ warnings.filterwarnings("ignore")
 import logging
 logger = logging.getLogger()
 
-INPUT_PATH = 'n1fits/mission/image/outgoing/ASTRO/' # Relative path from root directory
-ALIGNED_PATH = 'ObjectDetection/aligned/'
-DIFFERENCED_PATH = 'ObjectDetection/differenced/'
-FLAGGED_PATH = 'ObjectDetection/flagged/'
-STACKED_PATH = 'ObjectDetection/stacked/'
-FLAGGED_ORIGINAL_PATH = 'ObjectDetection/flagged_original/'
-FLAGGED_ORIGINAL_FITS_PATH = 'ObjectDetection/flagged_original_fits/'
-CRH_PATH = 'ObjectDetection/cosmic_ray_hits/'
-FILTERED_FLAGGED_ORIGINAL_PATH = 'ObjectDetection/filtered_flagged_original/'
+INPUT_PATH = "/Users/rebeccamizrahi/Documents/McGill/Capstone/NEOSSAT_Image_Processor/ObjectDetection/13P_copy/"#'n1fits/mission/image/outgoing/ASTRO/' # Relative path from root directory
+ALIGNED_PATH = 'aligned/'
+DIFFERENCED_PATH = 'differenced/'
+FLAGGED_PATH = 'flagged/'
+STACKED_PATH = 'stacked/'
+FLAGGED_ORIGINAL_PATH = 'flagged_original/'
+FLAGGED_ORIGINAL_FITS_PATH = 'flagged_original_fits/'
+CRH_PATH = 'cosmic_ray_hits/'
+FILTERED_FLAGGED_ORIGINAL_PATH = 'filtered_flagged_original/'
 
 """
 Input: Path to fits file, and optionally: threshold, fwhm, sharplo, and roundlo for detection via DAOStarFinder
@@ -119,6 +119,7 @@ def find_closest_pair(tuples):
 @img_sources: sources from the image to be aligned
 @img_filename: filename of the image to be aligned
 description: Aligns one image to another based on the brightest star, such that their stars overlap.
+TODO: improvement. Currently only works on images taken in the same hour. If 'background' stars move too much, this will not work.
 """
 def align(base_sources, img_sources, img_filename):
 
@@ -135,6 +136,7 @@ def align(base_sources, img_sources, img_filename):
             return -1
         else:
             base_id, img_id, second_base_id, second_img_id = tuple
+            print(f"Aligning {img_filename} to {base_id} and {img_id}.")
     
         base_row = base_sources[base_sources['id'] == base_id]
         img_row = img_sources[img_sources['id'] == img_id]
@@ -276,7 +278,7 @@ def streak_detection(path):
         hdul_out = fits.HDUList([hdu])
         hdul_out.writeto(path, overwrite=True)
 
-        output_path = CRH_PATH + path.split("/")[1].split(".")[0]
+        output_path = CRH_PATH + path.split("/")[-1].split(".")[0]
         streak = Streak(path, min_points=30, area_cut=40, connectivity_angle=0.01, output_path=output_path)
     except FileNotFoundError:
         return None
@@ -324,6 +326,8 @@ def save_flagged_image(input_path, output_path, sources):
     plt.savefig(output_path, bbox_inches='tight', pad_inches=0)
     plt.close()
 
+    print(f"Flagged image saved to {output_path}.")
+
 """
 Description: Check if a point is inside any of the detected streaks.
 
@@ -357,6 +361,7 @@ def find_moving_objects(SOURCES, closeness_threshold=5):
     """
     objects = defaultdict(list) # Map object ID to list of (filename, image_id, x, y) tuples
     object_id = 0
+    euclidean_distance = lambda x1, y1, x2, y2: np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
 
     for fname, sources in SOURCES.items():
         if sources is None or len(sources) < 1:
@@ -365,7 +370,7 @@ def find_moving_objects(SOURCES, closeness_threshold=5):
             id, x, y = source['id'], source['xcentroid'], source['ycentroid']
             found = False
             for obj, coords in objects.items():
-                if any(abs(x - cx) <= closeness_threshold and abs(y - cy) <= closeness_threshold for _, _, cx, cy in coords):
+                if any(euclidean_distance(x, y, x2, y2) < closeness_threshold for _, _, x2, y2 in coords):
                     objects[obj].append((fname, id, x, y))
                     found = True
                     break
@@ -376,6 +381,11 @@ def find_moving_objects(SOURCES, closeness_threshold=5):
     # Filter out objects only detected in one image
     moving_objects = {obj: coords for obj, coords in objects.items() if len(set(fname for fname, _, _, _ in coords)) > 1}
 
+    # Filter out objects that don't move, i.e. largest distance is less then 0.05
+    for obj, coords in moving_objects.items():
+        if max(euclidean_distance(x1, y1, x2, y2) for _, _, x1, y1 in coords for _, _, x2, y2 in coords) < 0.05:
+            del moving_objects[obj]
+
     # Filter SOURCES to only include moving objects
     for fname in SOURCES:
         if SOURCES[fname] is None or len(SOURCES[fname]) < 1:
@@ -384,12 +394,70 @@ def find_moving_objects(SOURCES, closeness_threshold=5):
 
     return SOURCES
 
+
+def remove_lines(SOURCES, line_threshold=3, noise_threshold=5):
+    """
+    Filter out sources detected within noisy horizontal lines in the image.
+    
+    Args:
+    - sources: Table of detected sources, as returned by detect_objects.
+    - line_threshold: The thickness threshold above which a horizontal region is considered a line.
+    - noise_threshold: The intensity threshold to detect noise lines; adjust based on your data.
+    
+    Returns:
+    A filtered table of sources that are not within the detected noisy lines.
+    """
+    if SOURCES is None:
+        return None
+    
+    for filename in SOURCES:
+        if SOURCES[filename] is None or len(SOURCES[filename]) < 1:
+            continue
+    
+        sources = SOURCES[filename]
+
+        with fits.open(ALIGNED_PATH + filename) as hdul:
+            data = hdul[0].data
+    
+        # Calculate the mean intensity of each row
+        row_means = np.mean(data, axis=1)
+        row_std = np.std(data, axis=1)
+        
+        # Identify rows that significantly deviate from the mean
+        noise_rows = []
+        for i, (mean, std) in enumerate(zip(row_means, row_std)):
+            if abs(mean - np.mean(row_means)) > noise_threshold * np.mean(row_std):
+                noise_rows.append(i)
+        
+        # Expand identified rows into regions based on line_threshold
+        noise_regions = []
+        start = None
+        for i in noise_rows:
+            if start is None:
+                start = i
+            elif i - start > line_threshold:
+                noise_regions.append((start, i))
+                start = i
+            else:
+                continue
+        if start is not None:
+            noise_regions.append((start, noise_rows[-1] + 1))  # Include the last line
+        
+        # Filter out sources within these regions
+        filtered_sources = sources.copy()
+        for start, end in noise_regions:
+            filtered_sources = filtered_sources[~((filtered_sources['ycentroid'] >= start) & (filtered_sources['ycentroid'] <= end))]
+
+        SOURCES[filename] = filtered_sources
+    
+    return SOURCES
+
 """
 Parameters: list of filenames of fits files, the date of observation of the images.
 Description: Runs the entire detection pipeline on the input images.
 Outputs: Dictionary of filenames and their corresponding detected sources, including of the stacked image.
 """
-def DETECTION_PIPELINE(fits_files, date_obs):  
+def DETECTION_PIPELINE(fits_files, date_time_obs):  
 
     # Init dictionary to store sources
     SOURCES = {}
@@ -416,40 +484,26 @@ def DETECTION_PIPELINE(fits_files, date_obs):
     # Crop to same size
     crop_all(ALIGNED_PATH)
     
-    # Pixel Differencing
-    if len(fits_files) == 2 or len(fits_files) == 3:
-        for i, base_filename in enumerate(fits_files):
-            for j, comparison_filename in enumerate(fits_files):
-                if i != j: 
-                    base_path = os.path.join(ALIGNED_PATH, base_filename)
-                    comparison_path = os.path.join(ALIGNED_PATH, comparison_filename)
-                    pixel_difference(base_path, comparison_path, str(i) + str(j))
-    else: 
-        # Create a stacked image
-        stacked_image_path = STACKED_PATH + date_obs + ".fits"
-        image_stacker(input_path=ALIGNED_PATH, output_path=stacked_image_path)
-        stacked_image_sources = detect_objects(stacked_image_path)
-        # Add stacked image sources to SOURCES
-        SOURCES[stacked_image_path] = stacked_image_sources
+    # Create a stacked image
+    stacked_image_path = STACKED_PATH + date_time_obs + ".fits"
+    image_stacker(input_path=ALIGNED_PATH, output_path=stacked_image_path)
+    stacked_image_sources = detect_objects(stacked_image_path)
 
-        # Perform pixel differencing with all aligned images
-        for filename in fits_files:
-            error = pixel_difference_with_stack(os.path.join(ALIGNED_PATH, filename), stacked_image_path)
-            if error == -1:
-                continue
-            sources = detect_objects(DIFFERENCED_PATH + filename, threshold=40, fwhm=24, sharplo=0.4)
-            if sources is None or len(sources) < 1:
-                SOURCES[filename] = None
-                continue
+    # Add stacked image sources to SOURCES
+    SOURCES[stacked_image_path] = stacked_image_sources
 
-            # Add sources to SOURCES
-            SOURCES[filename] = sources
+    # Perform pixel differencing with all aligned images
+    for filename in fits_files:
+        error = pixel_difference_with_stack(os.path.join(ALIGNED_PATH, filename), stacked_image_path)
+        if error == -1:
+            continue
+        sources = detect_objects(DIFFERENCED_PATH + filename, threshold=40, fwhm=24, sharplo=0.4)
+        if sources is None or len(sources) < 1:
+            SOURCES[filename] = None
+            continue
 
-            if sources is not None and len(sources) > 0:
-                #print(f"Flagged {filename} for classification.")    
-                sources_coordinates = [(source['xcentroid'], source['ycentroid']) for source in sources]
-                save_flagged_image(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename.split(".")[0] + ".png", sources_coordinates)
-                save_flagged_image(INPUT_PATH + filename, FLAGGED_ORIGINAL_PATH + filename.split(".")[0] + ".png", sources_coordinates)     
+        # Add sources to SOURCES
+        SOURCES[filename] = sources
 
     return SOURCES
 
@@ -486,6 +540,7 @@ def FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS):
             SOURCES[filename] = rows_to_keep
 
     SOURCES = find_moving_objects(SOURCES)
+    SOURCES = remove_lines(SOURCES)
 
     # Save flagged images
     for filename in SOURCES:
@@ -573,17 +628,18 @@ if __name__ == "__main__":
     if not os.path.exists(FLAGGED_ORIGINAL_FITS_PATH):
         os.makedirs(FLAGGED_ORIGINAL_FITS_PATH)
 
-    # Separate files in input path by date
-    fits_files_by_date = {}
+    # Separate files in input path by date, hour
+    fits_files_by_time = {}
     for fits_file in INPUT_FILES:
-        # Open fits file
         with fits.open(INPUT_PATH + fits_file) as hdul:
             header = hdul[0].header
-            date_obs = header['DATE-OBS']
-            date_obs = date_obs.split("T")[0]
-            if date_obs not in fits_files_by_date:
-                fits_files_by_date[date_obs] = []
-            fits_files_by_date[date_obs].append(fits_file)
+            date_time_obs = header['DATE-OBS']
+            date_obs = date_time_obs.split("T")[0]
+            hour_obs = date_time_obs.split("T")[1][:2]
+            key = date_obs + "_" + hour_obs
+            if key not in fits_files_by_time:
+                fits_files_by_time[key] = []
+            fits_files_by_time[key].append(fits_file)
         
     # Run streak detection on each file
     COSMIC_RAY_HITS = {}
@@ -594,15 +650,25 @@ if __name__ == "__main__":
 
     SOURCES = {}
     # Run object detection pipeline on each date
-    for date_obs in fits_files_by_date:
-        print(f"Running pipeline for {date_obs} on {len(fits_files_by_date[date_obs])} images.")
-        SOURCES.update(DETECTION_PIPELINE(fits_files_by_date[date_obs], date_obs))
-        print(f"Finished pipeline for {date_obs}\n")
+    for date_time_obs in fits_files_by_time:
+        if len(fits_files_by_time[date_time_obs]) < 3:
+            continue
+        print(f"Running pipeline for {date_time_obs} on {len(fits_files_by_time[date_time_obs])} images.")
+        SOURCES.update(DETECTION_PIPELINE(fits_files_by_time[date_time_obs], date_time_obs))
+        print(f"Finished pipeline for {date_time_obs}\n")
 
     # Filter sources
     FILTERED_SOURCES = FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS)
     
     # Update headers
     UPDATE_HEADER(SOURCES)
+
+    # Save flagged images
+    if FILTERED_SOURCES is not None and len(FILTERED_SOURCES) > 0:
+        #print(f"Flagged {filename} for classification.")    
+        sources_coordinates = [(source['xcentroid'], source['ycentroid']) for source in FILTERED_SOURCES]
+        save_flagged_image(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename.split(".")[0] + ".png", sources_coordinates)
+        save_flagged_image(INPUT_PATH + filename, FLAGGED_ORIGINAL_PATH + filename.split(".")[0] + ".png", sources_coordinates)
+
 
     print(f"Finished object detection pipeline on {INPUT_PATH}.")
