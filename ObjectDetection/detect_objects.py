@@ -201,34 +201,6 @@ def image_stacker(input_path, output_path):
                              overwrite_output=True)
 
     return combined_image
-
-"""
-Perform pixel differencing on two FITS files
-"""
-def pixel_difference(image1_file, image2_file, idx):
-    try:
-        with fits.open(image1_file) as hdul1, fits.open(image2_file) as hdul2:
-            data1 = hdul1[0].data
-            data2 = hdul2[0].data
-
-            # Resize images to a common size if they are not the same size
-            if (data1.shape[0] != data2.shape[0] or data1.shape[1] != data2.shape[1]):
-                min_shape = (min(data1.shape[0], data2.shape[0]), min(data1.shape[1], data2.shape[1]))
-                data1 = resize(data1, min_shape, mode='constant')
-                data2 = resize(data2, min_shape, mode='constant')
-
-            # Perform pixel-wise difference
-            diff_data = np.abs(data1 - data2)  # Calculates absolute difference
-
-            # Save the difference image to a new FITS file
-            output_filename = DIFFERENCED_PATH + image1_file.split("/")[-1].split(".")[0] + "_" + idx + ".fits"
-            hdu = fits.PrimaryHDU(diff_data, header=hdul1[0].header)
-            hdul_out = fits.HDUList([hdu])
-            hdul_out.writeto(output_filename, overwrite=True)
-
-    except FileNotFoundError:
-        print(f"Could not find {image1_file} or {image2_file}. Previous steps may not have been completed.")
-        return -1
     
 """
 Performs pixel differencing with the stacked image found at STACKED_PATH
