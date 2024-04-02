@@ -170,6 +170,8 @@ if __name__ == "__main__":
                         del header[f'XCENT_{id}']
                         del header[f'YCENT_{id}']
                         del header[f'MAG_{id}']
+                        del header[f'DETRA_{id}']
+                        del header[f'DETDEC_{id}']
 
                     else:
 
