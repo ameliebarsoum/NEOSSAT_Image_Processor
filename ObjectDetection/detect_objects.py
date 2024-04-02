@@ -18,8 +18,9 @@ import warnings
 warnings.filterwarnings("ignore")
 import logging
 logger = logging.getLogger()
+logging.getLogger('astropy').setLevel(logging.WARNING)
 
-INPUT_PATH = "/Users/rebeccamizrahi/Documents/McGill/Capstone/NEOSSAT_Image_Processor/ObjectDetection/13P_copy/"#'n1fits/mission/image/outgoing/ASTRO/' # Relative path from root directory
+INPUT_PATH =  '../n1fits/mission/image/outgoing/ASTRO/'
 ALIGNED_PATH = 'aligned/'
 DIFFERENCED_PATH = 'differenced/'
 FLAGGED_PATH = 'flagged/'
@@ -28,6 +29,7 @@ FLAGGED_ORIGINAL_PATH = 'flagged_original/'
 FLAGGED_ORIGINAL_FITS_PATH = 'flagged_original_fits/'
 CRH_PATH = 'cosmic_ray_hits/'
 FILTERED_FLAGGED_ORIGINAL_PATH = 'filtered_flagged_original/'
+
 
 """
 Input: Path to fits file, and optionally: threshold, fwhm, sharplo, and roundlo for detection via DAOStarFinder
@@ -64,6 +66,7 @@ def detect_objects(filepath, threshold=15, fwhm=10.0, sharplo=0.2, roundlo=-1.0,
 
     return sources
 
+
 """
 Parameters: 
 - x, y coordinates of a point
@@ -77,6 +80,7 @@ def is_duplicate(x_coord, y_coord, source_list, threshold=0.05):
             return True
     return False
 
+
 """
 List all distances between each base source and each img source
 Returns list of tuples of the distance, id of base source, id of img source
@@ -89,6 +93,7 @@ def find_all_distances_between(base_sources, img_sources, max_distance=200):
             if distance <= max_distance: 
                 distances.append((distance, id_base, id_img))
     return distances
+
 
 """
 Find the closest pair of stars between two images such that
@@ -114,6 +119,7 @@ def find_closest_pair(tuples):
 
     return closest_pair
 
+
 """
 @base_sources: sources from an image with which the other image will be aligned to
 @img_sources: sources from the image to be aligned
@@ -136,7 +142,7 @@ def align(base_sources, img_sources, img_filename):
             return -1
         else:
             base_id, img_id, second_base_id, second_img_id = tuple
-            print(f"Aligning {img_filename} to {base_id} and {img_id}.")
+            # print(f"Aligning {img_filename} to {base_id} and {img_id}.")
     
         base_row = base_sources[base_sources['id'] == base_id]
         img_row = img_sources[img_sources['id'] == img_id]
@@ -152,12 +158,12 @@ def align(base_sources, img_sources, img_filename):
         shifted_data = shift(hdul[0].data, (shift_y, shift_x), mode='nearest')
         hdul[0].data = shifted_data
         
-        
         hdu = fits.PrimaryHDU(shifted_data, header=hdul[0].header)
         hdul_out = fits.HDUList([hdu])
         hdul_out.writeto(ALIGNED_PATH + img_filename, overwrite=True)
 
     return (shift_x, shift_y) 
+
 
 """
 Crops all images in the directory to the minimum sized image of the set
@@ -182,6 +188,7 @@ def crop_all(ALIGNED_PATH):
             # Write the trimmed image back to disk
             trimmed_ccd.write(ALIGNED_PATH + filename, overwrite=True)
 
+
 """
 Perform image stacking on a set of FITS files to reduce noise for pixel differencing
 """
@@ -202,6 +209,7 @@ def image_stacker(input_path, output_path):
 
     return combined_image
     
+
 """
 Performs pixel differencing with the stacked image found at STACKED_PATH
 """
@@ -231,13 +239,42 @@ def pixel_difference_with_stack(image1_path, stacked_image_path):
         print(f"Could not find {image1_path} or stacked image. Previous steps may not have been completed.")
         return
 
+
+def is_streak_straight(streak_instance, straightness_threshold=0.97):
+    """
+    Streak length should be much greater than width. If width is more than 0.3 length, it is not a cosmic ray hit.
+    """
+    x_min = streak_instance.get('x_min')
+    x_max = streak_instance.get('x_max')
+    y_min = streak_instance.get('y_min')
+    y_max = streak_instance.get('y_max')
+    length = ((x_max - x_min) ** 2 + (y_max - y_min) ** 2) ** 0.5
+    width = streak_instance.get('area') / length
+    print(f"Width of streak: {width}")
+    if width > 3:
+        print("Removing wide streak.")
+        return False
+
+    # Calculate the slope of the streak
+    slope = (y_max - y_min) / (x_max - x_min)
+    # Calculate the correlation coefficient between the x and y coordinates
+    correlation = np.corrcoef([x_min, x_max], [y_min, y_max])[0, 1]
+    if np.isnan(correlation):
+        correlation = 0
+
+    if abs(correlation) <= straightness_threshold:
+        print("Removing non-straight streak.")
+
+    return abs(correlation) > straightness_threshold
+
+
 """
 Use astride to detect cosmic ray hits in the image
 """
 def streak_detection(path):
     
     max_length = 500
-    min_length = 5
+    min_length = 10
 
     try:
         with fits.open(path) as hdul:
@@ -251,7 +288,8 @@ def streak_detection(path):
         hdul_out.writeto(path, overwrite=True)
 
         output_path = CRH_PATH + path.split("/")[-1].split(".")[0]
-        streak = Streak(path, min_points=30, area_cut=40, connectivity_angle=0.01, output_path=output_path)
+        streak = Streak(path, min_points=30, area_cut=40, shape_cut=0.9, output_path=output_path)
+
     except FileNotFoundError:
         return None
     streak.detect()
@@ -267,6 +305,12 @@ def streak_detection(path):
         if length > max_length or length < min_length or streak_instance.get('area') > streak_instance.get('perimeter'):
             streak.streaks.remove(streak_instance)
 
+    # Remove non-straight streaks
+    streak.streaks = [streak_instance for streak_instance in streak.streaks if is_streak_straight(streak_instance)]
+
+    # Remove streaks in noisy regions
+    streak.streaks = filter_streaks_in_noisy_lines(streak.streaks, data)
+
     if len(streak.streaks) == 0:
         return None
     
@@ -277,6 +321,61 @@ def streak_detection(path):
     streak.plot_figures()
 
     return streak.streaks
+
+
+def filter_streaks_in_noisy_lines(streaks, data, line_threshold=2, noise_threshold=3):
+    """
+    Filter out streaks detected within noisy horizontal lines in the image.
+    
+    Args:
+    - streaks: List of detected streak instances.
+    - data: The 2D numpy array of the image data.
+    - line_threshold: Thickness threshold above which a horizontal region is considered a line.
+    - noise_threshold: Intensity threshold to detect noisy lines; adjust based on your data.
+    
+    Returns:
+    A list of streaks that are not within the detected noisy lines.
+    """
+    row_means = np.mean(data, axis=1)
+    row_std = np.std(data, axis=1)
+    
+    # Identify rows that significantly deviate from the mean
+    noise_rows = []
+    for i, (mean, std) in enumerate(zip(row_means, row_std)):
+        if abs(mean - np.mean(row_means)) > noise_threshold * np.mean(row_std):
+            noise_rows.append(i)
+    
+    # Expand identified rows into regions based on line_threshold
+    noise_regions = []
+    start = None
+    for i in noise_rows:
+        if start is None:
+            start = i
+        elif i - start > line_threshold:
+            noise_regions.append((start, i))
+            start = i
+        else:
+            continue
+    if start is not None:
+        noise_regions.append((start, noise_rows[-1] + 1))  # Include the last line
+
+    # Save the image with the detected noisy lines in red
+    # plt.figure(figsize=(10, 10))
+    # plt.imshow(data, cmap='gray', origin='lower', norm=plt.Normalize(vmin=np.percentile(data, 5), vmax=np.percentile(data, 95)))
+    # for start, end in noise_regions:
+    #     plt.axhline(y=start, color='r', linestyle='--')
+    #     plt.axhline(y=end, color='r', linestyle='--')
+    # plt.axis('off')
+    # plt.savefig('noisy_lines' + str(len(noise_regions)) + '.png', bbox_inches='tight', pad_inches=0)
+    
+    # Filter out streaks within these regions
+    filtered_streaks = [streak for streak in streaks if not any(start <= streak['y_min'] <= end or start <= streak['y_max'] <= end for start, end in noise_regions)]
+    difference = len(streaks) - len(filtered_streaks)
+    if difference >= 1:
+           print(f"Filtered out {difference} streaks detected within noisy lines.")
+
+    return filtered_streaks
+
 
 """
 Parameters: input path to fits image, output path, sources
@@ -298,7 +397,6 @@ def save_flagged_image(input_path, output_path, sources):
     plt.savefig(output_path, bbox_inches='tight', pad_inches=0)
     plt.close()
 
-    print(f"Flagged image saved to {output_path}.")
 
 """
 Description: Check if a point is inside any of the detected streaks.
@@ -323,14 +421,16 @@ def is_source_in_streak(x_centroid, y_centroid, raw_borders):
             return True  # Source is inside a streak
     return False 
 
+
+"""
+Groups detected sources across images by suspected objects based on spatial consistency.
+
+Parameters:
+- source_detections: Dict, where each key is an image identifier and each value is a list of (x, y) tuples for detected sources.
+- closeness_threshold: Maximum distance between sources to consider them as part of the same object.
+"""
 def find_moving_objects(SOURCES, closeness_threshold=5):
-    """
-    Groups detected sources across images by suspected objects based on spatial consistency.
     
-    Parameters:
-    - source_detections: Dict, where each key is an image identifier and each value is a list of (x, y) tuples for detected sources.
-    - closeness_threshold: Maximum distance between sources to consider them as part of the same object.
-    """
     objects = defaultdict(list) # Map object ID to list of (filename, image_id, x, y) tuples
     object_id = 0
     euclidean_distance = lambda x1, y1, x2, y2: np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
@@ -354,9 +454,12 @@ def find_moving_objects(SOURCES, closeness_threshold=5):
     moving_objects = {obj: coords for obj, coords in objects.items() if len(set(fname for fname, _, _, _ in coords)) > 1}
 
     # Filter out objects that don't move, i.e. largest distance is less then 0.05
+    objs_to_remove = []
     for obj, coords in moving_objects.items():
         if max(euclidean_distance(x1, y1, x2, y2) for _, _, x1, y1 in coords for _, _, x2, y2 in coords) < 0.05:
-            del moving_objects[obj]
+            objs_to_remove.append(obj)
+    for obj in objs_to_remove:
+        del moving_objects[obj]
 
     # Filter SOURCES to only include moving objects
     for fname in SOURCES:
@@ -367,23 +470,24 @@ def find_moving_objects(SOURCES, closeness_threshold=5):
     return SOURCES
 
 
-def remove_lines(SOURCES, line_threshold=3, noise_threshold=5):
+"""
+Filter out sources detected within noisy horizontal lines in the image.
+
+Args:
+- sources: Table of detected sources, as returned by detect_objects.
+- line_threshold: The thickness threshold above which a horizontal region is considered a line.
+- noise_threshold: The intensity threshold to detect noise lines; adjust based on your data.
+
+Returns:
+A filtered table of sources that are not within the detected noisy lines.
     """
-    Filter out sources detected within noisy horizontal lines in the image.
-    
-    Args:
-    - sources: Table of detected sources, as returned by detect_objects.
-    - line_threshold: The thickness threshold above which a horizontal region is considered a line.
-    - noise_threshold: The intensity threshold to detect noise lines; adjust based on your data.
-    
-    Returns:
-    A filtered table of sources that are not within the detected noisy lines.
-    """
+def remove_sources_in_lines(SOURCES, line_threshold=3, noise_threshold=5):
+
     if SOURCES is None:
         return None
     
     for filename in SOURCES:
-        if SOURCES[filename] is None or len(SOURCES[filename]) < 1:
+        if SOURCES[filename] is None or len(SOURCES[filename]) < 1 or "stacked" in filename:
             continue
     
         sources = SOURCES[filename]
@@ -416,13 +520,12 @@ def remove_lines(SOURCES, line_threshold=3, noise_threshold=5):
             noise_regions.append((start, noise_rows[-1] + 1))  # Include the last line
         
         # Filter out sources within these regions
-        filtered_sources = sources.copy()
-        for start, end in noise_regions:
-            filtered_sources = filtered_sources[~((filtered_sources['ycentroid'] >= start) & (filtered_sources['ycentroid'] <= end))]
+        filtered_sources = [source for source in sources if not any(start <= source['ycentroid'] <= end for start, end in noise_regions)]
 
         SOURCES[filename] = filtered_sources
     
     return SOURCES
+
 
 """
 Parameters: list of filenames of fits files, the date of observation of the images.
@@ -439,10 +542,6 @@ def DETECTION_PIPELINE(fits_files, date_time_obs):
     base_source = None
     for filename in fits_files:
         cur_source = detect_objects(INPUT_PATH + filename, threshold=15, border=True) # Too many points = inaccurate alignment
-        # save detected objects image
-        if not os.path.exists("detected/"):
-            os.makedirs("detected/")
-        save_flagged_image(INPUT_PATH + filename, "detected/" + filename.split(".")[0] + "_d.png", [(source['xcentroid'], source['ycentroid']) for source in cur_source])
         source_tuples.append((cur_source, filename))
     
     # Select the source with the median detected objects as the base for alignment
@@ -452,6 +551,7 @@ def DETECTION_PIPELINE(fits_files, date_time_obs):
 
     for source in source_tuples:
         shift = align(base_source, source[0], source[1])
+        # print(f"Shifted {source[1]} by {shift} pixels.")
 
     # Crop to same size
     crop_all(ALIGNED_PATH)
@@ -480,6 +580,9 @@ def DETECTION_PIPELINE(fits_files, date_time_obs):
     return SOURCES
 
 
+"""
+Filter pipeline to remove false positives and cosmic ray hits from detected sources.
+"""
 def FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS):
 
     # Get sources from stacked images 
@@ -512,7 +615,7 @@ def FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS):
             SOURCES[filename] = rows_to_keep
 
     SOURCES = find_moving_objects(SOURCES)
-    SOURCES = remove_lines(SOURCES)
+    SOURCES = remove_sources_in_lines(SOURCES)
 
     # Save flagged images
     for filename in SOURCES:
@@ -526,11 +629,13 @@ def FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS):
     return SOURCES
 
 
+"""
+Header function to update headers with detected sources after detection & filtering.
+"""
 def UPDATE_HEADER(SOURCES):
 
     if SOURCES is None or len(SOURCES) == 0:
         print("No sources detected. Exiting.")
-        return -1
     
     for filename in SOURCES:
         if "stacked" in filename:
@@ -565,18 +670,22 @@ def UPDATE_HEADER(SOURCES):
         
         # Now make a copy of the updated file to add the flagged folder
         shutil.copy(INPUT_PATH + filename, FLAGGED_ORIGINAL_FITS_PATH)
-        print(f"Flagged {filename} for classification.")
-        return 0
+        print(f"Updated header of flagged {filename}, and added to {FLAGGED_ORIGINAL_FITS_PATH}.")
 
 
 if __name__ == "__main__":
     
-    if not os.path.exists(INPUT_PATH) or len(os.listdir(INPUT_PATH)) == 0:
-        print("Input path does not exist or is empty. Exiting.")
+    if not os.path.exists(INPUT_PATH):
+        print("Input path does not exist.")
+        exit()
+    
+    if len(os.listdir(INPUT_PATH)) < 2:
+        print("Input path is empty.")
         exit()
     
     # Unzip any files in the input path that end in .gz (cleaner compresses)
     for filename in os.listdir(INPUT_PATH):
+        print(f"Unzipping {filename}.")
         if filename.endswith('.gz'):
             os.system(f"gunzip {INPUT_PATH + filename}")
 
@@ -607,8 +716,8 @@ if __name__ == "__main__":
             header = hdul[0].header
             date_time_obs = header['DATE-OBS']
             date_obs = date_time_obs.split("T")[0]
-            hour_obs = date_time_obs.split("T")[1][:2]
-            key = date_obs + "_" + hour_obs
+            #hour_obs = date_time_obs.split("T")[1][:2]
+            key = date_obs #+ "_" + hour_obs
             if key not in fits_files_by_time:
                 fits_files_by_time[key] = []
             fits_files_by_time[key].append(fits_file)
@@ -631,16 +740,22 @@ if __name__ == "__main__":
 
     # Filter sources
     FILTERED_SOURCES = FILTER_SOURCES(SOURCES, COSMIC_RAY_HITS)
-    
-    # Update headers
-    UPDATE_HEADER(SOURCES)
 
     # Save flagged images
     if FILTERED_SOURCES is not None and len(FILTERED_SOURCES) > 0:
-        #print(f"Flagged {filename} for classification.")    
-        sources_coordinates = [(source['xcentroid'], source['ycentroid']) for source in FILTERED_SOURCES]
-        save_flagged_image(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename.split(".")[0] + ".png", sources_coordinates)
-        save_flagged_image(INPUT_PATH + filename, FLAGGED_ORIGINAL_PATH + filename.split(".")[0] + ".png", sources_coordinates)
+        
+        # Update headers
+        UPDATE_HEADER(FILTERED_SOURCES)
 
+        for filename in FILTERED_SOURCES:
+            if "stacked" in filename:
+                continue
+            sources = FILTERED_SOURCES[filename]
+            if sources is not None and len(sources) > 0:
+                sources_coordinates = [(source['xcentroid'], source['ycentroid']) for source in sources]
+                print(f"Flagged {filename} for classification for sources at {sources_coordinates}.")
+                save_flagged_image(DIFFERENCED_PATH + filename, FLAGGED_PATH + filename.split(".")[0] + ".png", sources_coordinates)
+                save_flagged_image(DIFFERENCED_PATH + filename, DIFFERENCED_PATH + filename.split(".")[0] + ".png", [])
+                save_flagged_image(INPUT_PATH + filename, FLAGGED_ORIGINAL_PATH + filename.split(".")[0] + ".png", sources_coordinates)
 
     print(f"Finished object detection pipeline on {INPUT_PATH}.")
