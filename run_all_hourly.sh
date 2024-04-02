@@ -3,7 +3,8 @@
 # TODO: Activate the virtual environment
 # source /PATH/TO/VENV/activate
 
-cd /Users/rebeccamizrahi/Documents/McGill/Capstone/NEOSSAT_Image_Processor
+# IF RUNNING WITH CRONJOB:
+# cd FULL/PATH/TO/NEOSSAT_Image_Processor
 
 # Remove intermediary folders if they exist. Will do nothing if not.
     # From cleaner
@@ -111,4 +112,4 @@ echo " . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ."
 echo " "
 
 # Deactivate the virtual environment
-deactivate
+# deactivate
