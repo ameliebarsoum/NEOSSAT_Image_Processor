@@ -669,7 +669,8 @@ def UPDATE_HEADER(SOURCES):
             hdul.flush()  # Writes the updated header to the file
         
         # Now make a copy of the updated file to add the flagged folder
-        shutil.copy(INPUT_PATH + filename, FLAGGED_ORIGINAL_FITS_PATH)
+        os.rename(INPUT_PATH + filename, FLAGGED_ORIGINAL_FITS_PATH + filename)
+        shutil.copy(FLAGGED_ORIGINAL_FITS_PATH + filename, INPUT_PATH)
         print(f"Updated header of flagged {filename}, and added to {FLAGGED_ORIGINAL_FITS_PATH}.")
 
 
@@ -685,9 +686,12 @@ if __name__ == "__main__":
     
     # Unzip any files in the input path that end in .gz (cleaner compresses)
     for filename in os.listdir(INPUT_PATH):
-        print(f"Unzipping {filename}.")
         if filename.endswith('.gz'):
-            os.system(f"gunzip {INPUT_PATH + filename}")
+            try:
+                os.system(f"gunzip {INPUT_PATH + filename}")
+            except OSError:
+                print(f"Could not unzip {filename}.")
+                continue
 
     # Get all fits files in the input path
     INPUT_FILES = [filename for filename in os.listdir(INPUT_PATH) if filename.lower().endswith('.fits')]
