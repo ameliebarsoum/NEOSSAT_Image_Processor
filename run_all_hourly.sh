@@ -1,19 +1,38 @@
 #!/bin/bash
 
+# TODO: Activate the virtual environment
+# source /PATH/TO/VENV/activate
+
+cd /Users/rebeccamizrahi/Documents/McGill/Capstone/NEOSSAT_Image_Processor
+
 # Remove intermediary folders if they exist. Will do nothing if not.
     # From cleaner
 rm -rf "n1fits/mission/image/fits_processor"
 rm -rf n1fits/mission/image/outgoing/ASTRO/*
+rm -rf "n1fits/mission/image/fits_processor/incoming"
+rm -rf "n1fits/mission/image/fits_processor/outgoing"
+rm -rf "n1fits/mission/image/fits_processor/outgoing/ASTRO"
 
     # From ObjectDetection
 rm -rf "ObjectDetection/aligned/"
 rm -rf "ObjectDetection/differenced/"
 rm -rf "ObjectDetection/stacked/"
 rm -rf "ObjectDetection/flagged/"
+rm -rf "ObjectDetection/cosmic_ray_hits/"
+rm -rf "ObjectDetection/flagged_original/"
+rm -rf "ObjectDetection/flagged_original_fits/"
+rm -rf "ObjectDetection/filtered_flagged_original/"
 
 find . -name ".DS_Store" -delete
 
-paths=$(python3 DataCollection/import_fits_automated.py)
+cd DataCollection
+paths=$(python3 import_fits_automated.py)
+cd ..
+
+# Append DataCollection/ to the beginning of each path in paths
+paths=$(echo "$paths" | sed "s/^/DataCollection\//")
+# Echo paths
+echo "$paths"
 
 # Iterate through each path of FITS image sets
 for path in $paths; do
@@ -55,7 +74,9 @@ for path in $paths; do
     python3 n1fits/bin/launch_fits.py # places cleaned images in **../mission/image/outgoing/ASTRO/**
 
     # Run ObjectDetection
-    python3 ObjectDetection/detect_objects.py
+    cd ObjectDetection
+    python3 detect_objects.py
+    cd ..
 
     # Run ObjectClassification from ObjectClassification/classify_object.py
     cd ObjectClassification
@@ -73,6 +94,21 @@ for path in $paths; do
     rm -rf "ObjectDetection/differenced/"
     rm -rf "ObjectDetection/stacked/"
     rm -rf "ObjectDetection/flagged/"
+    rm -rf "ObjectDetection/cosmic_ray_hits/"
+    rm -rf "ObjectDetection/flagged_original/"
+    rm -rf "ObjectDetection/flagged_original_fits/"
+    rm -rf "ObjectDetection/filtered_flagged_original/"
     
     rm -rf "$path"
+
+    echo "* * * *"
+    echo " "
+
 done
+
+echo " "
+echo " . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ."
+echo " "
+
+# Deactivate the virtual environment
+deactivate
