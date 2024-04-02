@@ -7,6 +7,11 @@ import astropy.units as u
 import subprocess
 import warnings
 from astropy.utils.exceptions import AstropyWarning
+from playwright.sync_api import sync_playwright
+
+# Using Playwright with Python: https://playwright.dev/python/docs/intro
+# pip install playwright
+# playwright install
 
 # Ignore specific FITSFixedWarnings related to 'datfix' and 'unitfix'
 warnings.filterwarnings('ignore', category=AstropyWarning, message=".*'datfix' made the change.*")
@@ -99,7 +104,53 @@ def format_mpc_observation(ra_deg, dec_deg, mag, obs_date, obs_code="C53"):
     return formatted_observation
 
 def findOrbit(observations_file_path):
-    return None
+
+    with sync_playwright() as playwright:
+
+        # Setup playwright browser
+        # Set headless=False if you want to see the browser
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        # Navigate to the website
+        page.goto("https://www.projectpluto.com/fo.htm")
+
+        # Read from observations file
+        with open(observations_file_path, 'r') as file:
+            text_to_submit = file.read()
+
+        # Fill the text box with content from the text file
+        page.fill("#TextArea", text_to_submit)
+
+        # Click the "submit" and wait for the navigation to complete
+        with page.expect_navigation():
+            page.wait_for_selector("input[type='submit'][value=' Compute orbit and ephemerides ']", state="attached")
+            page.click("input[type='submit'][value=' Compute orbit and ephemerides ']")
+
+        # Extract all text from the next page
+        result_text = page.inner_text("body")
+
+        # Cleanup
+        browser.close()
+
+        # Define the start and end markers
+        start_marker = "Orbital elements:"
+        end_marker = "Residuals in arcseconds:"
+
+        # Find the position of the markers
+        start_pos = result_text.find(start_marker) + len(start_marker)
+        end_pos = result_text.find(end_marker)
+
+        # Extract the text between the markers to get the orbital elements
+        extracted_text = result_text[start_pos:end_pos].strip()
+
+        # if orbital elements exist, return them
+        if extracted_text is not None:
+            return extracted_text
+        
+        # otherwise return N/A
+        else:
+            return "N/A"
 
 if __name__ == "__main__":
 
@@ -151,7 +202,6 @@ if __name__ == "__main__":
                     output_file_path = 'formatted_observations.txt'
 
                     # Open the output file in write mode, wiping any existing content and write the new observation
-                    
                     with open(output_file_path, 'w') as output_file:
                         output_file.write(formatted_observation)
 
