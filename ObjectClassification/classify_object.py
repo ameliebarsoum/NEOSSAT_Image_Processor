@@ -12,7 +12,7 @@ from astropy.utils.exceptions import AstropyWarning
 warnings.filterwarnings('ignore', category=AstropyWarning, message=".*'datfix' made the change.*")
 warnings.filterwarnings('ignore', category=AstropyWarning, message=".*'unitfix' made the change.*")
 
-INPUT_PATH = '../ObjectDetection/flagged_original_fits/'
+INPUT_PATH = '../ObjectDetection/flagged_original_fits/' 
 
 # Function to call astcheck with the specified input file
 def call_astcheck(input_file_path):
@@ -137,6 +137,11 @@ if __name__ == "__main__":
             
                     # Convert pixel coordinates (xcentroid, ycentroid) to celestial coordinates (RA, Dec)
                     ra, dec = wcs.all_pix2world(xcentroid, ycentroid, 0)
+                    detra = ra.item() # detected ra as scalar
+                    detdec = dec.item() # detected dec as scalar
+
+                    header[f'DETRA_{id}'] = (detra, f'Right Ascension of detected object {id}')
+                    header[f'DETDEC_{id}'] = (detdec, f'Declination of detected object {id}')                    
 
                     # Format and print the example observation
                     formatted_observation = format_mpc_observation(ra, dec, mag, time_image_taken)
@@ -160,7 +165,8 @@ if __name__ == "__main__":
                     if isClassified:
 
                         # Remove fields from header if no objects found
-                        del header[f'ID_{id}']
+                        # COMMENT THIS OUT if you want to receive emails for all detected objects
+                        del header[f'ID_{id}'] 
                         del header[f'XCENT_{id}']
                         del header[f'YCENT_{id}']
                         del header[f'MAG_{id}']
@@ -192,6 +198,7 @@ if __name__ == "__main__":
                 # Delete file if no objects found
                 if os.path.exists(observations_file_path):
                     os.remove(observations_file_path)
+
 
             # Save changes to the FITS file
             hdul.flush()
