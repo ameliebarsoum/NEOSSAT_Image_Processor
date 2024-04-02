@@ -13,6 +13,8 @@ import numpy as np
 import requests
 import pyvo
 from urllib.parse import urlencode
+import logging
+logging.getLogger('pyvo.dal.query').setLevel(logging.WARNING)
 
 def fetch_images():
      
@@ -58,7 +60,7 @@ def fetch_images():
     # Execute the query
     results = cadc.exec_sync(adql_query)
     if results is None or len(results) < 1:
-        print("No images found")
+        print(f"No images found between {start_time} and {end_time}")
         exit()
 
     # Editted function to ignore Coordinates and radius (we want all angles...)
@@ -144,7 +146,7 @@ def fetch_images():
         if observation_id in obs_id_to_radec:
             RA, DEC = obs_id_to_radec[observation_id]
         else:
-            print(f"RA and DEC for observation ID {observation_id} not found.")
+            # print(f"RA and DEC for observation ID {observation_id} not found.")
             continue
 
         # Format RA and DEC for file naming (rounded to no decimal places)
@@ -152,7 +154,7 @@ def fetch_images():
         DEC_formatted = f"{int(round(DEC))}".replace('.', 'p').replace('-', 'm')
 
         # Download directory based on RA and DEC
-        download_directory = f'./FITSImages_{RA_formatted}_{DEC_formatted}'
+        download_directory = f'FITSImages_{RA_formatted}_{DEC_formatted}'
         if not os.path.exists(download_directory):
             os.makedirs(download_directory)
 
@@ -184,11 +186,11 @@ def fetch_images():
             if response.status_code == 200:
                 with open(file_path, 'wb') as f:
                     f.write(response.content)
-                print(f"Downloaded {idx + 1}/{len(image_list)}: {filename}")
-            else:
-                print(f"Failed to download {filename}: HTTP Status Code {response.status_code}")
-        else:
-            print(f"File already exists: {filename}")
+                # print(f"Downloaded {idx + 1}/{len(image_list)}: {filename}")
+            # else:
+                # print(f"Failed to download {filename}: HTTP Status Code {response.status_code}")
+        # else:
+            # print(f"File already exists: {filename}")
 
     return paths
 
