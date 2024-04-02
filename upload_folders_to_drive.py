@@ -98,26 +98,80 @@ def upload_folder(service, folder_path, drive_folder_name, parent_id=None):
     print(f'All files uploaded to folder "{drive_folder_name}" within the existing Drive folder.')
 
 
+def delete_drive_folder(service, folder_id):
+    """
+    Deletes a folder or file on Google Drive by ID.
+
+    Args:
+    - service: Authenticated Google Drive service instance.
+    - folder_id: The ID of the folder or file to delete.
+    """
+    service.files().delete(fileId=folder_id).execute()
+    print(f'Folder/File with ID {folder_id} has been deleted.')
+
+def find_drive_folder(service, name, parent_id):
+    """
+    Finds a folder on Google Drive by name under a specified parent folder.
+
+    Args:
+    - service: Authenticated Google Drive service instance.
+    - name: The name of the folder to find.
+    - parent_id: The ID of the parent folder to search within.
+
+    Returns:
+    The ID of the found folder, or None if not found.
+    """
+    query = f"name='{name}' and '{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    response = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+    files = response.get('files', [])
+    if len(files) > 0:
+        return files[0].get('id')
+    return None
+
+def create_or_recreate_drive_folder(service, name, parent_id):
+    """
+    Creates or recreates a folder on Google Drive. If the folder already exists,
+    it is deleted and a new one is created.
+
+    Args:
+    - service: Authenticated Google Drive service instance.
+    - name: The name of the folder.
+    - parent_id: The ID of the parent folder under which to create the new folder.
+
+    Returns:
+    The ID of the newly created folder.
+    """
+    existing_folder_id = find_drive_folder(service, name, parent_id)
+    if existing_folder_id:
+        delete_drive_folder(service, existing_folder_id)
+    return create_drive_folder(service, name, parent_id)
+
+
 if __name__ == '__main__':
 
     args = sys.argv
     parent_folder = args[1]
-    parent_folder = parent_folder[2:]    # Remove string ./ from parent folder
+    parent_folder = parent_folder.split('/')[-1]    # Extract the last folder name
     
-    top_folder_id = NEOSSAT_folder_id
+    top_folder_id = NEOSSAT_folder_id    
 
     service = login_to_google_drive()
-    parent_id = create_drive_folder(service, parent_folder, top_folder_id)
+    parent_id = None
 
     flagged_difference_path = "ObjectDetection/flagged"
     if os.path.exists(flagged_difference_path) and len(os.listdir(flagged_difference_path)) > 0:
+        if parent_id == None:
+            parent_id = create_or_recreate_drive_folder(service, parent_folder, top_folder_id)
         upload_folder(service, flagged_difference_path, "Flagged_differenced", parent_id=parent_id)
 
     flagged_original_path = "ObjectDetection/flagged_original"
     if os.path.exists(flagged_original_path) and len(os.listdir(flagged_original_path)) > 0:
+        if parent_id == None:
+            parent_id = create_or_recreate_drive_folder(service, parent_folder, top_folder_id)
         upload_folder(service, flagged_original_path, "Flagged_original", parent_id=parent_id)
 
     cosmic_ray_hits_path = "ObjectDetection/cosmic_ray_hits"
     if os.path.exists(cosmic_ray_hits_path) and len(os.listdir(cosmic_ray_hits_path)) > 0:
+        if parent_id == None:
+            parent_id = create_or_recreate_drive_folder(service, parent_folder, top_folder_id)
         upload_folder(service, "ObjectDetection/cosmic_ray_hits", "Cosmic_ray_hits", parent_id=parent_id)
-
