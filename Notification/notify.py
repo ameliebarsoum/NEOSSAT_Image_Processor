@@ -2,8 +2,9 @@ import os
 import smtplib
 from astropy.io import fits
 from email.message import EmailMessage
+import shutil
 
-DIFFERENCED_PATH = '../ObjectDetection/filtered_flagged_fits/'
+DIFFERENCED_PATH = '../ObjectDetection/differenced/'
 FLAGGED_PATH = '../ObjectDetection/flagged_original_fits/'
 
 def send_email_with_fits(filepath, recipient_email, sender_email, sender_password, smtp_server, smtp_port):
@@ -20,6 +21,8 @@ def send_email_with_fits(filepath, recipient_email, sender_email, sender_passwor
         # Initialize variables to hold coordinates
         xcentroids = []
         ycentroids = []
+        ras = []
+        decs = []
 
         # Extract all XCENTER and YCENTER values
         for key in header.keys():
@@ -27,10 +30,19 @@ def send_email_with_fits(filepath, recipient_email, sender_email, sender_passwor
                 xcentroids.append(header[key])
             elif key.startswith('YCENT'):
                 ycentroids.append(header[key])
-
-        # Construct coordinates string
-        coordinates_str = "\n".join([f"Coordinates of anomaly {i+1} (x, y): ({x}, {y})"
-                                     for i, (x, y) in enumerate(zip(xcentroids, ycentroids))])
+            elif key.startswith('DETRA'):
+                ras.append(header[key])
+            elif key.startswith('DETDEC'):
+                decs.append(header[key])
+        
+        print(xcentroids, ycentroids, ras, decs)
+        # Construct coordinates string for the email body:
+                # Format: Coordinates of source with id: id = (X: x, Y: y) -> (RA: ra, Dec: dec)
+        coordinates_str = ""
+        i = 1
+        for x, y, ra, dec in zip(xcentroids, ycentroids, ras, decs):
+            coordinates_str += (f"Coordinates of anomaly {i} = (X: {x}, Y: {y}) -> (RA: {ra}, Dec: {dec})\n")
+            i += 1
 
         # Format the body with the extracted information
         body = """
@@ -68,32 +80,20 @@ def send_email_with_fits(filepath, recipient_email, sender_email, sender_passwor
 
 
 if __name__ == "__main__":
+    
+    for fn in os.listdir(FLAGGED_PATH):
 
-    fn = "NEOS_SCI_2021317013021.fits"
-
-    ## MOCK FOR TESTING ##           
-    with fits.open(DIFFERENCED_PATH + fn, mode='update') as hdul:
-        header = hdul[0].header
-        header[f'XCENT_1'] = 1
-        header[f'YCENT_1'] = 1
-                
-        # Save changes to header
-        hdul.flush()  # Writes the updated header to the file
-                
-        # Now move the updated file to the flagged folder
-        os.rename(DIFFERENCED_PATH + fn, FLAGGED_PATH + fn)
-        print(f"Flagged {fn} for classification.")
-
-   
-    filepath = os.path.join(FLAGGED_PATH, fn)
-    try:
-        send_email_with_fits(
-            filepath=filepath,
-            recipient_email='amelie.barsoum@gmail.com', 
-            sender_email='capstone.18.neossat@gmail.com',   
-            sender_password='pbta yiit hati tvkj',    
-            smtp_server='smtp.gmail.com',           
-            smtp_port=465                             
-        )
-    except Exception as e:
-        print(f"An error occurred while sending the email for {fn}: {e}")
+        filepath = os.path.join(FLAGGED_PATH, fn)
+        try:
+            send_email_with_fits(
+                filepath=filepath,
+                recipient_email='amelie.barsoum@gmail.com', 
+                sender_email='capstone.18.neossat@gmail.com',   
+                sender_password='melj eluf vndc gpwt',    
+                smtp_server='smtp.gmail.com',           
+                smtp_port=465                             
+            )
+            break
+        except Exception as e:
+            print(f"An error occurred while sending the email for {fn}: {e}")
+            continue
