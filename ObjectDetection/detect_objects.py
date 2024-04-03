@@ -20,7 +20,7 @@ import logging
 logger = logging.getLogger()
 logging.getLogger('astropy').setLevel(logging.WARNING)
 
-INPUT_PATH =  '../n1fits/mission/image/outgoing/ASTRO/'
+INPUT_PATH = '../n1fits/mission/image/outgoing/ASTRO/'
 ALIGNED_PATH = 'aligned/'
 DIFFERENCED_PATH = 'differenced/'
 FLAGGED_PATH = 'flagged/'
@@ -168,9 +168,15 @@ def align(base_sources, img_sources, img_filename):
 """
 Crops all images in the directory to the minimum sized image of the set
 """
-def crop_all(ALIGNED_PATH):
+def crop_all(path, files):
+
+    # Sanity checks
+    if len(files) == 0:
+        return
+    files = [f for f in files if f.lower().endswith('.fits') and f in os.listdir(path)]
+           
     # Get all the images in the directory and load them as CCDData objects
-    ccds = [CCDData.read(ALIGNED_PATH + filename, unit='adu') for filename in os.listdir(ALIGNED_PATH) if filename.lower().endswith('.fits')]
+    ccds = [CCDData.read(path + filename, unit='adu') for filename in files]
     
     # Identify the smallest image size within the specified range
     sizes = [ccd.shape for ccd in ccds]
@@ -179,21 +185,21 @@ def crop_all(ALIGNED_PATH):
     min_size = (min(sizes, key=lambda x: x[0])[0], min(sizes, key=lambda x: x[1])[1])
     
     # Replace original images with new cropped images
-    for filename in os.listdir(ALIGNED_PATH):
+    for filename in files:
         if filename.lower().endswith('.fits'):
             # Open as CCDData to maintain metadata
-            ccd = CCDData.read(ALIGNED_PATH + filename, unit='adu')
+            ccd = CCDData.read(path + filename, unit='adu')
             trimmed_ccd = trim_image(ccd, fits_section=f'[1:{min_size[1]}, 1:{min_size[0]}]')
             
             # Write the trimmed image back to disk
-            trimmed_ccd.write(ALIGNED_PATH + filename, overwrite=True)
+            trimmed_ccd.write(path + filename, overwrite=True)
 
 
 """
 Perform image stacking on a set of FITS files to reduce noise for pixel differencing
 """
-def image_stacker(input_path, output_path):
-    paths = [input_path + filename for filename in os.listdir(input_path) if filename.lower().endswith('.fits')]
+def image_stacker(fits_filenames, output_path):
+    paths = [ALIGNED_PATH + fn for fn in fits_filenames]
     ccds = [CCDData.read(path, unit="adu") for path in paths]
     
     combined_image = combine(ccds,
@@ -250,9 +256,8 @@ def is_streak_straight(streak_instance, straightness_threshold=0.97):
     y_max = streak_instance.get('y_max')
     length = ((x_max - x_min) ** 2 + (y_max - y_min) ** 2) ** 0.5
     width = streak_instance.get('area') / length
-    print(f"Width of streak: {width}")
-    if width > 3:
-        print("Removing wide streak.")
+    if width > 3.3:
+        print(f"Removing wide streak with width {width}.")
         return False
 
     # Calculate the slope of the streak
@@ -533,6 +538,11 @@ Description: Runs the entire detection pipeline on the input images.
 Outputs: Dictionary of filenames and their corresponding detected sources, including of the stacked image.
 """
 def DETECTION_PIPELINE(fits_files, date_time_obs):  
+    
+    # Sanity check
+    if fits_files is None or len(fits_files) == 0:
+        print("No images found. Moving on.")
+        return None
 
     # Init dictionary to store sources
     SOURCES = {}
@@ -540,9 +550,18 @@ def DETECTION_PIPELINE(fits_files, date_time_obs):
     # Alignment
     source_tuples = []
     base_source = None
+
+    fits_files_to_remove = []
     for filename in fits_files:
         cur_source = detect_objects(INPUT_PATH + filename, threshold=15, border=True) # Too many points = inaccurate alignment
-        source_tuples.append((cur_source, filename))
+        if cur_source is None or len(cur_source) < 1:
+            print(f"No sources detected in {filename}. Skipping this image.")
+            fits_files_to_remove.append(filename)
+        else:
+            source_tuples.append((cur_source, filename))
+    
+    for filename in fits_files_to_remove:
+        fits_files.remove(filename)
     
     # Select the source with the median detected objects as the base for alignment
     source_tuples.sort(key=lambda x: len(x[0]))
@@ -553,12 +572,12 @@ def DETECTION_PIPELINE(fits_files, date_time_obs):
         shift = align(base_source, source[0], source[1])
         # print(f"Shifted {source[1]} by {shift} pixels.")
 
-    # Crop to same size
-    crop_all(ALIGNED_PATH)
+    # Crop all files in path to the same (minimum) size
+    crop_all(path=ALIGNED_PATH, files=fits_files)
     
     # Create a stacked image
     stacked_image_path = STACKED_PATH + date_time_obs + ".fits"
-    image_stacker(input_path=ALIGNED_PATH, output_path=stacked_image_path)
+    image_stacker(fits_filenames=fits_files, output_path=stacked_image_path)
     stacked_image_sources = detect_objects(stacked_image_path)
 
     # Add stacked image sources to SOURCES
@@ -715,6 +734,7 @@ if __name__ == "__main__":
 
     # Separate files in input path by date, hour
     fits_files_by_time = {}
+
     for fits_file in INPUT_FILES:
         with fits.open(INPUT_PATH + fits_file) as hdul:
             header = hdul[0].header
@@ -725,7 +745,22 @@ if __name__ == "__main__":
             if key not in fits_files_by_time:
                 fits_files_by_time[key] = []
             fits_files_by_time[key].append(fits_file)
-        
+    
+    # If there are more than 32 images in a day, separate that date by hour
+    date_keys = list(fits_files_by_time.keys())
+    for date in date_keys:
+        if len(fits_files_by_time[date]) > 32:
+            for fits_file in fits_files_by_time[date]:
+                with fits.open(INPUT_PATH + fits_file) as hdul:
+                    header = hdul[0].header
+                    date_time_obs = header['DATE-OBS']
+                    hour_obs = date_time_obs.split("T")[1][:2]
+                    key = date + "_" + hour_obs
+                    if key not in fits_files_by_time:
+                        fits_files_by_time[key] = []
+                    fits_files_by_time[key].append(fits_file)
+            del fits_files_by_time[date]
+
     # Run streak detection on each file
     COSMIC_RAY_HITS = {}
     for filename in INPUT_FILES:
